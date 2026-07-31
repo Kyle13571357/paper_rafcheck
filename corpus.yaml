@@ -1,0 +1,121 @@
+# 文件註冊表:ref → doc_id → tier → file
+# ref 對應 cs550_survey.pdf 參考文獻列表 [1]-[12] 的編號,已與該文件 References 段落核對一致
+# tier: 0 = survey 本身(二手轉述),1 = 原文(一手)
+# check.py 的 reference resolution 完全依賴這張表——改動前先確認沒有下游程式碼寫死了舊的 doc_id
+
+- ref: 0
+  doc_id: cs550_survey
+  tier: 0
+  file: papers/cs550_survey.pdf
+  title: "A Comprehensive Survey of Multi-Tier Memory Management Techniques in Modern Computer Systems"
+  short: survey
+  venue: "CS550 Term Project, Illinois Institute of Technology"
+  year: 2025
+
+- ref: 1
+  doc_id: mtm_eurosys24
+  tier: 1
+  file: papers/mtm_eurosys24.pdf
+  title: "MTM: Rethinking Memory Profiling and Migration for Multi-Tiered Large Memory"
+  short: MTM
+  venue: EuroSys
+  year: 2024
+
+- ref: 2
+  doc_id: nomad_osdi24
+  tier: 1
+  file: papers/nomad_osdi24.pdf
+  title: "NOMAD: Non-Exclusive Memory Tiering via Transactional Page Migration"
+  short: NOMAD
+  venue: OSDI
+  year: 2024
+
+- ref: 3
+  doc_id: colloid_sosp24
+  tier: 1
+  file: papers/colloid_sosp24.pdf
+  title: "Tiered Memory Management: Access Latency is the Key!"
+  short: Colloid
+  venue: SOSP
+  year: 2024
+
+- ref: 4
+  doc_id: soar_alto_osdi25
+  tier: 1
+  file: papers/soar_alto_osdi25.pdf
+  title: "Tiered Memory Management Beyond Hotness"
+  short: Soar/Alto
+  venue: OSDI
+  year: 2025
+
+- ref: 5
+  doc_id: adaptive_migration_arxiv25
+  tier: 1
+  file: papers/adaptive_migration_arxiv25.pdf
+  title: "Adaptive Migration Decision for Multi-Tenant Memory Systems"
+  short: Adaptive
+  venue: arXiv:2505.09164
+  year: 2025
+
+- ref: 6
+  doc_id: chrono_eurosys25
+  tier: 1
+  file: papers/chrono_eurosys25.pdf
+  title: "Chrono: Meticulous Hotness Measurement and Flexible Page Migration for Memory Tiering"
+  short: Chrono
+  venue: EuroSys
+  year: 2025
+
+- ref: 7
+  doc_id: finetuning_arxiv25
+  tier: 1
+  file: papers/finetuning_arxiv25.pdf
+  title: "From Good to Great: Improving Memory Tiering Performance Through Parameter Tuning"
+  short: G2G
+  venue: arXiv:2504.18714
+  year: 2025
+
+- ref: 8
+  doc_id: hybridtier_asplos25
+  tier: 1
+  file: papers/hybridtier_asplos25.pdf
+  title: "HybridTier: An Adaptive and Lightweight CXL-Memory Tiering System"
+  short: HybridTier
+  venue: ASPLOS
+  year: 2025
+
+- ref: 9
+  doc_id: m5_asplos25
+  tier: 1
+  file: papers/m5_asplos25.pdf
+  title: "M5: Mastering Page Migration and Memory Management for CXL-based Tiered Memory Systems"
+  short: M5
+  venue: ASPLOS
+  year: 2025
+
+- ref: 10
+  doc_id: neomem_micro24
+  tier: 1
+  file: papers/neomem_micro24.pdf
+  title: "NeoMem: Hardware/Software Co-Design for CXL-Native Memory Tiering"
+  short: NeoMem
+  venue: MICRO
+  year: 2024
+
+- ref: 11
+  doc_id: flexmem_atc24
+  tier: 1
+  file: papers/flexmem_atc24.pdf
+  title: "FlexMem: Adaptive Page Profiling and Migration for Tiered Memory"
+  short: FlexMem
+  venue: "USENIX ATC"
+  year: 2024
+
+- ref: 12
+  doc_id: telescope_atc24
+  tier: 1
+  file: papers/telescope_atc24.pdf
+  title: "Telescope: Telemetry for Gargantuan Memory Footprint Applications"
+  short: Telescope
+  venue: "USENIX ATC"
+  year: 2024
