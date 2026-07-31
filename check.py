@@ -218,15 +218,29 @@ def format_evidence(hits):
     return "\n\n".join(parts)
 
 
+# A number whose unit was destroyed by a broken font table. parse.py maps the
+# Mathematical Alphanumeric range to ASCII, so "54 µs" ends up as "54ZM" -- it
+# reads as ordinary text and matches no query naming the unit.
+MISENCODED_UNIT_RE = re.compile(r"\d\s*(?:[\U0001D400-\U0001D7FF]{1,4}|[A-Z]{2,4}\b)")
+
+
 def numeric_prescreen(claim, hits):
     """Deterministic check of whether the claimed number appears at all.
 
     Runs before the model so the model's verdict can be compared against
     arithmetic that did not come from a model. Returns None when the claim has
-    no comparable number."""
+    no comparable number.
+
+    A negative result is reported as *unreliable* when the retrieved text
+    contains numbers whose units were lost to a broken font encoding. That
+    distinction matters: searching M5 for "54 µs" finds nothing, yet the paper
+    states it plainly -- the unit extracts as "ZM". Reporting a confident
+    "not found" there produces a false accusation against a correct citation,
+    which is precisely the error this project exists to prevent."""
     claimed = claim.get("value")
     if claimed is None or parse_quantity(claimed) is None:
         return None
+    suspect = []
     for h in hits:
         for sent in re.split(r"(?<=[.!?])\s+", h["text"]):
             for m in re.finditer(r"[-+]?\d[\d,]*(?:\.\d+)?\s*"
@@ -235,7 +249,21 @@ def numeric_prescreen(claim, hits):
                     return {"found": True, "matched": m.group(0).strip(),
                             "in_doc": h["doc_id"],
                             "page": h["page_start"], "sentence": sent.strip()[:300]}
-    return {"found": False}
+        for m in MISENCODED_UNIT_RE.finditer(h["text"]):
+            suspect.append({"doc_id": h["doc_id"], "page": h["page_start"],
+                            "text": m.group(0)})
+
+    result = {"found": False}
+    if suspect:
+        result["reliable"] = False
+        result["reason"] = (
+            f"{len(suspect)} number(s) in the retrieved text carry units lost to a "
+            f"broken font encoding (e.g. {suspect[0]['text']!r} in "
+            f"{suspect[0]['doc_id']} p{suspect[0]['page']}), so a unit-bearing "
+            f"value can be present yet unmatchable. Check the rendered page "
+            f"before concluding the figure is absent.")
+        result["sites"] = suspect[:5]
+    return result
 
 
 def adjudicate(claim, hits, timeout=300):
@@ -314,6 +342,20 @@ def check_passage(passage, retriever=None, k=6, dry_run=False, claims=None):
 
         verdict = adjudicate(claim, hits)
         record.update(verdict)
+
+        # A "not_found" resting on text whose units were destroyed by a broken
+        # font is not a finding, it is a limitation of the extraction. Downgrade
+        # it to needs-human rather than let it stand as an accusation against a
+        # citation that may well be correct.
+        ps = record.get("numeric_prescreen") or {}
+        if (record["verdict"] == "not_found"
+                and not ps.get("found") and ps.get("reliable") is False):
+            record["verdict"] = "underspecified"
+            record["confidence"] = "low"
+            record["explanation"] = (
+                "cannot verify from the text layer: " + ps["reason"] + " "
+                + (verdict.get("explanation") or ""))
+            record["needs_visual_check"] = True
 
         # An uncited claim whose number *is* present in some original is the
         # "possibly missing citation" case, not a plain pass.
