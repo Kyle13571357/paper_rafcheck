@@ -38,8 +38,9 @@ import yaml
 
 import llm
 
+from corpus import load_corpus
+
 ROOT = Path(__file__).parent
-CORPUS_YAML = ROOT / "corpus.yaml"
 
 NOT_STATED = "資料未提及 (not stated in the retrieved sources)"
 
@@ -159,8 +160,8 @@ def ask(question, retriever=None, k=6, doc_id=None, tier=None, exclude_tier=None
     }
 
 
-def render(result, show_all_sources=False):
-    corpus = {e["doc_id"]: e for e in yaml.safe_load(CORPUS_YAML.read_text())}
+def render(result, show_all_sources=False, retriever_corpus=None):
+    corpus = (retriever_corpus or load_corpus()).by_doc_id
     print(f"Q: {result['question']}\n")
     if not result["answered"]:
         print(result["not_stated"])

@@ -21,6 +21,7 @@ answers and claim-checking light up when a key is set.
     > /help
 """
 
+import argparse
 import re
 import sys
 import time
@@ -28,8 +29,9 @@ from pathlib import Path
 
 import yaml
 
+from corpus import load_corpus
+
 ROOT = Path(__file__).parent
-CORPUS_YAML = ROOT / "corpus.yaml"
 
 BANNER = """paper-refcheck  —  查找與校對
 
@@ -78,14 +80,19 @@ def fmt_hit(i, h, corpus_by_id, width=320):
 
 
 def main():
-    corpus = yaml.safe_load(CORPUS_YAML.read_text())
-    corpus_by_id = {e["doc_id"]: e for e in corpus}
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--corpus", default=None, help="corpus directory")
+    args = ap.parse_args()
+
+    cor = load_corpus(args.corpus)
+    corpus = cor.entries
+    corpus_by_id = cor.by_doc_id
 
     print(BANNER)
     print("載入檢索模型…", end="", flush=True)
     t0 = time.time()
     from retrieve import Retriever, query_tables
-    r = Retriever()
+    r = Retriever(cor)
     r.search("warmup", k=1)          # force the lazy model loads now, not mid-question
     print(f" 完成（{time.time() - t0:.0f}s，之後每次查詢約 0.5s）\n")
 
@@ -161,7 +168,7 @@ def main():
         m = re.match(r"^/tables\s+(.+)$", line)
         if m:
             rows = query_tables(m.group(1).strip(), doc_id=state["doc"],
-                                tier=state["tier"])
+                                tier=state["tier"], corpus=cor)
             if not rows:
                 print("  表格層無相符列")
             for h in rows:

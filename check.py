@@ -39,8 +39,9 @@ import yaml
 import llm
 from units import quantities_match, parse_quantity
 
+from corpus import load_corpus
+
 ROOT = Path(__file__).parent
-CORPUS_YAML = ROOT / "corpus.yaml"
 
 VERDICTS = ("supported", "contradicted", "not_found",
             "condition_mismatch", "underspecified")
@@ -107,13 +108,9 @@ Reply with ONLY a JSON object:
 }"""
 
 
-def load_corpus():
-    return yaml.safe_load(CORPUS_YAML.read_text())
-
-
 def build_ref_map(corpus):
     """ref number -> entry. This table, not the model, resolves citations."""
-    return {e["ref"]: e for e in corpus}
+    return corpus.by_ref
 
 
 def resolve_reference(cited_ref, ref_map):
@@ -287,8 +284,9 @@ def adjudicate(claim, hits, timeout=300):
     }
 
 
-def check_passage(passage, retriever=None, k=6, dry_run=False, claims=None):
-    corpus = load_corpus()
+def check_passage(passage, retriever=None, k=6, dry_run=False, claims=None,
+                  corpus=None):
+    corpus = corpus or (retriever.corpus if retriever is not None else load_corpus())
     ref_map = build_ref_map(corpus)
 
     if claims is None:
@@ -611,31 +609,32 @@ def render_document_report(report, show_all=False):
               f"用 --all 顯示）")
 
 
-SELF_AUDIT_TARGETS = [
-    # the four seeds plus the AOL case, quoted from the parsed survey
-    "Successful migrations add a fixed 54 µs penalty, calibrated to the "
-    "tens-of-microseconds 4 KB page-migration cost reported for CXL-based "
-    "tiered memory in M5 [9], so migration-heavy policies see higher stall time.",
+def self_audit_passages(corpus, limit=8):
+    """Passages from the tier-0 document to audit against what they cite.
 
-    "Using the 54 µs page-migration cost reported by M5 [9] and a 170 ns "
-    "DRAM–CXL latency gap, this requires on the order of a few hundred "
-    "accesses to amortize (≈300 accesses).",
+    Prefers the list declared in checks.yaml. With none declared, samples
+    cited passages out of the tier-0 document itself, so `--self-audit` works
+    on a corpus nobody has hand-curated."""
+    declared = corpus.checks.get("self_audit") or []
+    if declared:
+        return [re.sub(r"\s+", " ", p).strip() for p in declared]
 
-    "Telescope [12] exploits the radix page-table hierarchy, pruning cold "
-    "subtrees early to maintain 90%+ precision and recall on 5 TB workloads at "
-    "~0.9% of a single CPU, and is designed to scale to PB-level footprints.",
-
-    "Colloid [3] observes that measured access latency under contention—not "
-    "unloaded baseline—determines performance. Achieves 1.01–1.76× "
-    "speedup by migrating pages away from congested fast tier.",
-
-    "Adaptive Migration [5] improves performance over NOMAD by 14.8% on "
-    "migration-unfriendly single-tenant workloads, 36.0% on migration-friendly "
-    "ones, and by up to 72.0% in multi-tenant environments.",
-
-    "CXL-attached memory typically adds 50–100 ns of latency and offers only "
-    "20–70% of local DRAM bandwidth [8].",
-]
+    tier0 = corpus.primary_tier0()
+    if tier0 is None:
+        return []
+    import json as _json
+    passages = []
+    with open(corpus.blocks_path) as f:
+        for line in f:
+            b = _json.loads(line)
+            if b["doc_id"] != tier0["doc_id"] or b["block_type"] != "prose":
+                continue
+            # a passage is worth auditing when it carries both a citation and
+            # a number -- that is what check.py can actually verify
+            if re.search(r"\[\d+\]", b["text"]) and re.search(r"\d", b["text"]):
+                passages.append(re.sub(r"\s+", " ", b["text"]).strip())
+    passages.sort(key=len, reverse=True)
+    return passages[:limit]
 
 
 def main():
@@ -655,6 +654,7 @@ def main():
                     help="document mode: also show claims that checked out")
     ap.add_argument("--limit", type=int, default=None,
                     help="document mode: only the first N paragraphs")
+    ap.add_argument("--corpus", default=None, help="corpus directory")
     args = ap.parse_args()
 
     # a whole draft goes through the document path: paragraph splitting plus a
@@ -667,8 +667,8 @@ def main():
             print(f"error: {e}", file=sys.stderr)
             return 1
         from retrieve import Retriever
-        report = check_document(args.file, retriever=Retriever(), k=args.k,
-                                limit=args.limit)
+        report = check_document(args.file, retriever=Retriever(load_corpus(args.corpus)),
+                                k=args.k, limit=args.limit)
         if args.json:
             print(json.dumps(report, indent=2, ensure_ascii=False))
         else:
@@ -679,8 +679,14 @@ def main():
             print(f"\nwrote {args.out}", file=sys.stderr)
         return
 
+    corpus = load_corpus(args.corpus)
+
     if args.self_audit:
-        passages = SELF_AUDIT_TARGETS
+        passages = self_audit_passages(corpus)
+        if not passages:
+            print("no tier-0 document registered, and checks.yaml declares no "
+                  "self_audit passages -- nothing to audit", file=sys.stderr)
+            return 1
     elif args.file:
         passages = [read_document(args.file)]
     else:
@@ -693,7 +699,7 @@ def main():
     retriever = None
     if not args.dry_run:
         from retrieve import Retriever
-        retriever = Retriever()
+        retriever = Retriever(corpus)
 
     reports = []
     for i, p in enumerate(passages):

@@ -1,0 +1,40 @@
+# Expectations for THIS corpus.
+#
+# The pipeline's guarantees are general -- a set query returns every member, a
+# doc_id filter confines rather than reorders. What a correct answer looks
+# like is not: it depends on which papers are registered. So the assertions
+# live here beside corpus.yaml, and the modules only know how to run them.
+#
+# A different corpus writes a different checks.yaml and the same code tests it.
+
+set_queries:
+  - name: which systems support 2 MB pages
+    pattern: "2mb"
+    column: "granularity"
+    # MTM's cell reads "2 MB THP" while NOMAD's and NeoMem's read "4 KB / 2 MB".
+    # A literal match on "2 MB THP" returns only MTM -- the silent-omission
+    # failure the structured layer exists to prevent.
+    expect: [MTM, NOMAD, NeoMem]
+
+retrieval:
+  query: page migration latency cost microseconds
+  scoped_doc: m5_asplos25
+
+# Passages from the tier-0 document to audit against the sources they cite.
+# Used by `check.py --self-audit`. Left empty, check.py samples cited passages
+# from the tier-0 document automatically.
+self_audit:
+  - "Successful migrations add a fixed 54 µs penalty, calibrated to the
+     tens-of-microseconds 4 KB page-migration cost reported for CXL-based
+     tiered memory in M5 [9], so migration-heavy policies see higher stall time."
+  - "Telescope [12] exploits the radix page-table hierarchy, pruning cold
+     subtrees early to maintain 90%+ precision and recall on 5 TB workloads at
+     ~0.9% of a single CPU, and is designed to scale to PB-level footprints."
+  - "Colloid [3] observes that measured access latency under contention—not
+     unloaded baseline—determines performance. Achieves 1.01–1.76× speedup by
+     migrating pages away from congested fast tier."
+  - "Adaptive Migration [5] improves performance over NOMAD by 14.8% on
+     migration-unfriendly single-tenant workloads, 36.0% on migration-friendly
+     ones, and by up to 72.0% in multi-tenant environments."
+  - "CXL-attached memory typically adds 50–100 ns of latency and offers only
+     20–70% of local DRAM bandwidth [8]."

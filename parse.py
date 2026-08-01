@@ -11,6 +11,7 @@ Usage: python3 parse.py [doc_id ...]   (default: every doc in corpus.yaml)
 Output: blocks.jsonl in the repo root, one JSON object per block.
 """
 
+import argparse
 import fitz  # PyMuPDF
 import yaml
 import json
@@ -20,9 +21,9 @@ import unicodedata
 from pathlib import Path
 from collections import Counter
 
+from corpus import load_corpus
+
 ROOT = Path(__file__).parent
-CORPUS_YAML = ROOT / "corpus.yaml"
-OUT_PATH = ROOT / "blocks.jsonl"
 
 
 # ---------------------------------------------------------------------------
@@ -520,8 +521,8 @@ def looks_like_heading(text, is_big):
 # Main per-document parse
 # ---------------------------------------------------------------------------
 
-def parse_document(entry):
-    path = ROOT / entry["file"]
+def parse_document(entry, corpus):
+    path = corpus.root / entry["file"]
     doc = fitz.open(path)
     blocks = []
 
@@ -812,28 +813,31 @@ def parse_document(entry):
     return blocks
 
 
-def load_corpus():
-    return yaml.safe_load(CORPUS_YAML.read_text())
-
-
 def main():
-    corpus = load_corpus()
-    wanted = set(sys.argv[1:])
-    if wanted:
-        corpus = [e for e in corpus if e["doc_id"] in wanted]
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("doc_ids", nargs="*",
+                    help="only these documents (default: every one registered)")
+    ap.add_argument("--corpus", default=None,
+                    help="corpus directory (default: nearest corpus.yaml)")
+    args = ap.parse_args()
+
+    corpus = load_corpus(args.corpus)
+    wanted = set(args.doc_ids)
+    entries = [e for e in corpus.entries if e["doc_id"] in wanted] if wanted \
+        else corpus.entries
 
     all_blocks = []
-    for entry in corpus:
+    for entry in entries:
         print(f"parsing {entry['doc_id']} ({entry['file']}) ...", file=sys.stderr)
-        blocks = parse_document(entry)
+        blocks = parse_document(entry, corpus)
         print(f"  -> {len(blocks)} blocks", file=sys.stderr)
         all_blocks.extend(blocks)
 
-    with open(OUT_PATH, "w") as f:
+    with open(corpus.blocks_path, "w") as f:
         for b in all_blocks:
             b.pop("_y1", None)   # internal bookkeeping for heading merging
             f.write(json.dumps(b, ensure_ascii=False) + "\n")
-    print(f"wrote {len(all_blocks)} blocks to {OUT_PATH}", file=sys.stderr)
+    print(f"wrote {len(all_blocks)} blocks to {corpus.blocks_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":

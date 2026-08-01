@@ -28,10 +28,9 @@ from pathlib import Path
 
 import numpy as np
 
+from corpus import Corpus, load_corpus
+
 ROOT = Path(__file__).parent
-INDEX_DIR = ROOT / "index"
-TABLES_DIR = ROOT / "tables"
-CORPUS_YAML = ROOT / "corpus.yaml"
 
 RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
@@ -39,14 +38,15 @@ RRF_K = 60          # standard reciprocal-rank-fusion damping
 
 
 class Retriever:
-    def __init__(self, load_reranker=False):
+    def __init__(self, corpus: Corpus | None = None, load_reranker=False):
         import faiss
         from rank_bm25 import BM25Okapi
 
-        self.chunks = [json.loads(l) for l in open(INDEX_DIR / "chunks.jsonl")]
-        self.manifest = json.loads((INDEX_DIR / "manifest.json").read_text())
-        self.embeddings = np.load(INDEX_DIR / "embeddings.npy")
-        self.faiss_index = faiss.read_index(str(INDEX_DIR / "prose.faiss"))
+        self.corpus = corpus or load_corpus()
+        self.chunks = [json.loads(l) for l in open(self.corpus.chunks_path)]
+        self.manifest = json.loads(self.corpus.manifest_path.read_text())
+        self.embeddings = np.load(self.corpus.embeddings_path)
+        self.faiss_index = faiss.read_index(str(self.corpus.faiss_path))
         self.bm25 = BM25Okapi([c["tokens"] for c in self.chunks])
         self._faiss = faiss
         self._embedder = None
@@ -172,16 +172,18 @@ class Retriever:
 # Table layer: set queries go here, never through the vector index.
 # --------------------------------------------------------------------------
 
-def load_tables(doc_id=None):
+def load_tables(doc_id=None, corpus: Corpus | None = None):
+    corpus = corpus or load_corpus()
     tables = []
-    for path in sorted(TABLES_DIR.glob("*.json")):
+    for path in sorted(corpus.tables_dir.glob("*.json")):
         if doc_id and path.stem != doc_id:
             continue
         tables.extend(json.loads(path.read_text()))
     return tables
 
 
-def query_tables(pattern, column=None, doc_id=None, tier=None, normalize=True):
+def query_tables(pattern, column=None, doc_id=None, tier=None, normalize=True,
+                 corpus: Corpus | None = None):
     """Every row whose cell matches -- a complete set, not a top-k.
 
     `normalize` folds "2 MB"/"2MB" together, which is what makes a size query
@@ -194,7 +196,7 @@ def query_tables(pattern, column=None, doc_id=None, tier=None, normalize=True):
         return normalize_units(s).replace(" ", "").lower() if normalize else s
 
     hits = []
-    for t in load_tables(doc_id):
+    for t in load_tables(doc_id, corpus=corpus):
         if tier is not None and t["tier"] != tier:
             continue
         header = t.get("header") or []
@@ -220,18 +222,32 @@ def query_tables(pattern, column=None, doc_id=None, tier=None, normalize=True):
 
 # --------------------------------------------------------------------------
 
-def acceptance_check():
-    """Module D: the same query with and without a doc_id filter must
-    converge correctly -- every filtered hit inside the filter, and the
-    filter must not merely reorder the unfiltered list."""
-    r = Retriever()
-    query = "page migration latency cost microseconds"
-    target = "m5_asplos25"
+def acceptance_check(corpus: Corpus | None = None):
+    """A doc_id filter must *confine* results, not merely reorder them, and
+    excluding a tier must remove it entirely.
+
+    Both properties hold for any corpus, so nothing here names a document:
+    the query and the document to scope to come from checks.yaml, and the
+    tier assertion is derived from what the registry declares."""
+    corpus = corpus or load_corpus()
+    r = Retriever(corpus)
+    cfg = corpus.retrieval_checks()
+
+    query = cfg.get("query")
+    target = cfg.get("scoped_doc")
+    if not query:
+        # fall back to something the corpus certainly contains
+        query = " ".join(r.chunks[0]["text"].split()[:8])
+    if not target:
+        target = max(((c["doc_id"], 1) for c in r.chunks), key=lambda kv: kv[1])[0]
+    if target not in corpus.by_doc_id:
+        print(f"  checks.yaml names an unknown scoped_doc {target!r}")
+        return False
 
     unfiltered = r.search(query, k=8)
     filtered = r.search(query, k=8, doc_id=target)
 
-    print("--- Module D acceptance: doc_id filter convergence ---")
+    print("--- retrieval acceptance: filters confine, not reorder ---")
     print(f"query: {query!r}\n")
     print(f"unfiltered top-8 docs: {[h['doc_id'] for h in unfiltered]}")
     print(f"filtered  top-8 docs : {[h['doc_id'] for h in filtered]}")
@@ -241,19 +257,13 @@ def acceptance_check():
     print(f"\n  every filtered hit is from {target}: {all_in_scope}")
     print(f"  filtered search returned results   : {got_results} ({len(filtered)})")
 
-    # tier filter: excluding tier 0 must remove every survey chunk
-    no_survey = r.search(query, k=8, exclude_tier=0)
-    tiers = {h["tier"] for h in no_survey}
-    print(f"  exclude_tier=0 leaves tiers        : {sorted(tiers)}")
-    tier_ok = 0 not in tiers
+    tier_ok = True
+    if 0 in corpus.tiers():
+        tiers = {h["tier"] for h in r.search(query, k=8, exclude_tier=0)}
+        print(f"  exclude_tier=0 leaves tiers        : {sorted(tiers)}")
+        tier_ok = 0 not in tiers
 
-    # the table layer must still return the complete 2 MB set
-    rows = query_tables(r"2mb", column="granularity")
-    systems = sorted({re.sub(r"\s*\[\d+\]\s*", "", h["row_label"]).strip() for h in rows})
-    print(f"  table filter '2mb' -> {systems}")
-    set_ok = {"MTM", "NOMAD", "NeoMem"}.issubset(set(systems))
-
-    ok = all_in_scope and got_results and tier_ok and set_ok
+    ok = all_in_scope and got_results and tier_ok
     print(f"\n  RESULT: {'PASS' if ok else 'FAIL'}")
     return ok
 

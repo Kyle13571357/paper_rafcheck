@@ -4,6 +4,17 @@
 
 系統**不判定對錯**,它只負責把可疑處與出處並排放好。
 
+**通用工具,不是綁死這 13 篇論文的腳本。** 語料是 `Corpus` 物件(`corpus.py`),每個模組都吃這個物件而不是寫死路徑;哪些論文、哪個是 tier-0、集合查詢該回傳什麼,都在 `corpus.yaml` / `checks.yaml` 裡宣告,不在程式碼裡。這裡的 12 篇 memory-tiering SOTA 論文 + 1 篇 survey,是驗證用的測試集,不是設計目標。
+
+```bash
+python3 corpus.py init ~/papers --out ~/my-review \
+  --bibliography draft.docx --tier0-pdf draft.pdf
+```
+
+讀資料夾裡每篇 PDF,用最大字級抽標題、正則抓 venue/year,解析 `draft.docx` 的參考文獻列表把 `[9]` 這種標號配回實際檔案,寫出一份可審閱的 `corpus.yaml`——這是本來要花一個下午手工做的事。實測對這個真實草稿(12 篇論文、docx 參考文獻)**12/12 全部配對正確**,而且工具自己認出資料夾裡有一篇論文(`goodsurvey.pdf`,主題其實是 cache partitioning)從未被引用,自動標成「未配對」而不是硬塞。
+
+換一批論文、換一份 survey,跑同一條 pipeline 即可;`checks.yaml` 裡的驗收項目(哪些系統該出現在某個集合查詢裡)也是宣告式的,不用改程式碼。
+
 ---
 
 ## 動機:一個動工前就存在的真實 finding
@@ -50,8 +61,10 @@ papers/*.pdf
 
 | 檔案 | 作用 |
 |---|---|
+| `corpus.py` | `Corpus` 物件 + `init` 子命令。每個模組的語料路徑、doc_id 解析、tier 判斷都經過這裡,程式碼裡不寫死任何一篇論文 |
 | `corpus.yaml` | `ref → doc_id → tier → file`。`check.py` 的 reference resolution 完全依賴這張表 |
-| `llm.py` | 所有模型呼叫的唯一入口,供應商可換 |
+| `checks.yaml` | 這批語料自己的驗收期望(集合查詢該回傳誰、doc_id filter 該收斂到誰)。換語料就換這份宣告,不改 `build_index.py` / `retrieve.py` |
+| `llm.py` | 所有模型呼叫的唯一入口,`LLMProvider` 抽象類別 + 各供應商子類別,供應商可換 |
 | `units.py` | 數值正規化(`54 µs` == `0.054 ms`),**純程式,不經模型** |
 | `eval/eval_set.jsonl` | 39 題人工標註評估集 |
 | `eval/run_baseline.py` | 三組對照實驗 |

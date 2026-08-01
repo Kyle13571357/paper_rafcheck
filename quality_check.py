@@ -9,6 +9,7 @@ Usage:  python3 quality_check.py [doc_id ...]
 Output: quality_report.json  (+ a summary table on stdout)
 """
 
+import argparse
 import fitz
 import yaml
 import json
@@ -19,10 +20,9 @@ from collections import defaultdict, Counter
 
 from parse import find_gaps
 
+from corpus import load_corpus
+
 ROOT = Path(__file__).parent
-CORPUS_YAML = ROOT / "corpus.yaml"
-BLOCKS_PATH = ROOT / "blocks.jsonl"
-REPORT_PATH = ROOT / "quality_report.json"
 
 # A page is only worth a (paid, slow) vision pass if a rule fired on it or it
 # claims to contain a table -- tables are where a silent column-attribution
@@ -51,16 +51,14 @@ def alnum_count(s):
     return sum(c.isalnum() for c in s)
 
 
-def load_corpus(wanted=None):
-    corpus = yaml.safe_load(CORPUS_YAML.read_text())
-    if wanted:
-        corpus = [e for e in corpus if e["doc_id"] in wanted]
-    return corpus
+def select_entries(corpus, wanted=None):
+    entries = corpus.entries
+    return [e for e in entries if e["doc_id"] in wanted] if wanted else entries
 
 
-def load_blocks():
+def load_blocks(corpus):
     by_doc_page = defaultdict(list)
-    with open(BLOCKS_PATH) as f:
+    with open(corpus.blocks_path) as f:
         for line in f:
             b = json.loads(line)
             by_doc_page[(b["doc_id"], b["page"])].append(b)
@@ -194,16 +192,21 @@ def check_page(entry, page, page_no, blocks, flags):
 
 
 def main():
-    wanted = set(sys.argv[1:])
-    corpus = load_corpus(wanted)
-    by_doc_page = load_blocks()
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("doc_ids", nargs="*")
+    ap.add_argument("--corpus", default=None, help="corpus directory")
+    args = ap.parse_args()
+
+    corpus = load_corpus(args.corpus)
+    entries = select_entries(corpus, set(args.doc_ids) or None)
+    by_doc_page = load_blocks(corpus)
 
     flags = []
     pages_total = 0
     table_pages = set()
 
-    for entry in corpus:
-        doc = fitz.open(ROOT / entry["file"])
+    for entry in entries:
+        doc = fitz.open(corpus.root / entry["file"])
         for i, page in enumerate(doc):
             page_no = i + 1
             pages_total += 1
@@ -230,7 +233,7 @@ def main():
         "review_pages": [{"doc_id": d, "page": p} for d, p in review_pages],
         "flags": flags,
     }
-    REPORT_PATH.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+    corpus.quality_report.write_text(json.dumps(report, indent=2, ensure_ascii=False))
 
     print(f"pages total            : {pages_total}")
     print(f"pages flagged by rules : {len(flagged_pages)} ({report['flag_rate']:.1%})")
@@ -244,7 +247,7 @@ def main():
     print("flags by severity:")
     for sev, n in sorted(report["by_severity"].items(), key=lambda kv: -kv[1]):
         print(f"  {n:5d}  {sev}")
-    print(f"\nwrote {REPORT_PATH}")
+    print(f"\nwrote {corpus.quality_report}")
 
 
 if __name__ == "__main__":
