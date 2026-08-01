@@ -42,7 +42,7 @@ from corpus import load_corpus
 
 ROOT = Path(__file__).parent
 
-NOT_STATED = "資料未提及 (not stated in the retrieved sources)"
+NOT_STATED = "not stated in the retrieved sources"
 
 SYSTEM_PROMPT = """You answer questions about computer-systems papers using ONLY the sources provided below.
 

@@ -535,17 +535,17 @@ def check_document(path, retriever=None, k=6, limit=None, progress=True):
     if limit:
         paras = paras[:limit]
     if progress:
-        print(f"{Path(path).name}: {len(paras)} 個含數字的段落待檢查\n",
+        print(f"{Path(path).name}: {len(paras)} numeric paragraph(s) to check\n",
               file=sys.stderr)
 
     all_results = []
     for i, para in enumerate(paras, 1):
         if progress:
-            print(f"  [{i}/{len(paras)}] …", file=sys.stderr)
+            print(f"  [{i}/{len(paras)}] ...", file=sys.stderr)
         try:
             rep = check_passage(para, retriever=retriever, k=k)
         except Exception as e:                          # noqa: BLE001
-            print(f"  段落 {i} 失敗: {type(e).__name__}: {e}", file=sys.stderr)
+            print(f"  paragraph {i} failed: {type(e).__name__}: {e}", file=sys.stderr)
             continue
         for rec in rep["results"]:
             rec["paragraph_index"] = i
@@ -568,45 +568,45 @@ def render_document_report(report, show_all=False):
         counts[v] = counts.get(v, 0) + 1
 
     print("=" * 78)
-    print(f"校對報告: {report['source']}")
-    print(f"段落 {report['paragraphs']} · claim {len(results)} · "
-          f"需注意 {len(problems)}")
+    print(f"Proofreading report: {report['source']}")
+    print(f"{report['paragraphs']} paragraph(s) . {len(results)} claim(s) . "
+          f"{len(problems)} need attention")
     print(f"model: {report['model']}")
     print("=" * 78)
 
     if not shown:
-        print("\n沒有發現問題。")
+        print("\nNo problems found.")
     for r in shown:
         c = r["claim"]
-        print(f"\n【{r.get('verdict')}】 段落 {r.get('paragraph_index')}"
-              f"  ·  {c.get('subject')} — {c.get('metric')} = {c.get('value')}")
-        print(f"  你寫的   : {c.get('source_span')}")
+        print(f"\n[{r.get('verdict')}] paragraph {r.get('paragraph_index')}"
+              f"  .  {c.get('subject')} - {c.get('metric')} = {c.get('value')}")
+        print(f"  as written : {c.get('source_span')}")
         if c.get("condition"):
-            print(f"  你的條件 : {c['condition']}")
+            print(f"  your condition   : {c['condition']}")
         if r.get("condition_in_source"):
-            print(f"  原文條件 : {r['condition_in_source']}")
+            print(f"  source condition : {r['condition_in_source']}")
         if r.get("explanation"):
-            print(f"  說明     : {r['explanation']}")
+            print(f"  why        : {r['explanation']}")
         ps = r.get("numeric_prescreen")
         if ps is not None and not ps.get("found"):
-            print("  數值比對 : 引用來源中找不到此數值（程式判定,非模型）")
+            print("  numeric check : value not found in the cited source (deterministic, not the model)")
         elif ps and ps.get("found"):
-            print(f"  數值比對 : {ps['matched']!r} 見 {ps['in_doc']} "
-                  f"p{ps['page']}（程式判定）")
+            print(f"  numeric check : {ps['matched']!r} found in {ps['in_doc']} "
+                  f"p{ps['page']} (deterministic)")
         if r.get("evidence_span"):
-            print(f"  原文     : {r['evidence_span'][:300]}")
+            print(f"  source     : {r['evidence_span'][:300]}")
         elif r.get("evidence"):
             e = r["evidence"][0]
-            print(f"  最相近   : {e['doc_id']} p{e['page_start']} — "
+            print(f"  closest match : {e['doc_id']} p{e['page_start']} - "
                   f"{e['text'][:220]}")
 
     print("\n" + "-" * 78)
-    print("統計: " + ", ".join(f"{k}={v}" for k, v in
-                               sorted(counts.items(),
-                                      key=lambda kv: VERDICT_PRIORITY.get(kv[0], 9))))
+    print("summary: " + ", ".join(f"{k}={v}" for k, v in
+                                  sorted(counts.items(),
+                                         key=lambda kv: VERDICT_PRIORITY.get(kv[0], 9))))
     if not show_all and len(results) > len(problems):
-        print(f"（已隱藏 {len(results) - len(problems)} 筆沒問題的 claim,"
-              f"用 --all 顯示）")
+        print(f"({len(results) - len(problems)} claim(s) that checked out are "
+              f"hidden; use --all to show them)")
 
 
 def self_audit_passages(corpus, limit=8):

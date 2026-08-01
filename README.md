@@ -1,45 +1,45 @@
 # paper-refcheck
 
-檢索與引用稽核系統。輸入一段已寫好的文字,逐條 claim 回查它引用的原文,把對不上的地方連同證據推到人眼前。
+A retrieval and citation-audit pipeline. Feed it a written passage and it checks each factual claim against the source it cites, surfacing every discrepancy alongside the original text.
 
-系統**不判定對錯**,它只負責把可疑處與出處並排放好。
+The system does not adjudicate right or wrong -- it places the suspect claim and its evidence side by side and lets a human decide. That design choice runs through every layer below.
 
-**通用工具,不是綁死這 13 篇論文的腳本。** 語料是 `Corpus` 物件(`corpus.py`),每個模組都吃這個物件而不是寫死路徑;哪些論文、哪個是 tier-0、集合查詢該回傳什麼,都在 `corpus.yaml` / `checks.yaml` 裡宣告,不在程式碼裡。這裡的 12 篇 memory-tiering SOTA 論文 + 1 篇 survey,是驗證用的測試集,不是設計目標。
+**A general tool, not a script tied to one paper set.** The corpus is a `Corpus` object (`corpus.py`); every module reads from it instead of a hard-coded path. Which documents are registered, which one is under audit, and what a correct answer looks like for a set query are all declared in `corpus.yaml` / `checks.yaml`, not hard-coded in the pipeline. The 12 memory-tiering systems papers and the survey auditing them, used throughout this repo, are the test corpus this was validated against -- not the design target.
 
 ```bash
 python3 corpus.py init ~/papers --out ~/my-review \
   --bibliography draft.docx --tier0-pdf draft.pdf
 ```
 
-讀資料夾裡每篇 PDF,用最大字級抽標題、正則抓 venue/year,解析 `draft.docx` 的參考文獻列表把 `[9]` 這種標號配回實際檔案,寫出一份可審閱的 `corpus.yaml`——這是本來要花一個下午手工做的事。實測對這個真實草稿(12 篇論文、docx 參考文獻)**12/12 全部配對正確**,而且工具自己認出資料夾裡有一篇論文(`goodsurvey.pdf`,主題其實是 cache partitioning)從未被引用,自動標成「未配對」而不是硬塞。
+Reads every PDF's title, venue, and year off its largest first-page type; parses a draft's reference list and matches each numbered citation back to its file by title overlap; writes a reviewable `corpus.yaml` -- work that otherwise takes an afternoon by hand. Run against this project's own real draft (12 source papers, a `.docx` bibliography): 12/12 citations matched correctly, and the tool correctly declined to force a match for a topically unrelated PDF that happened to sit in the same folder (a cache-partitioning survey, never actually cited), flagging it as unmatched instead of guessing.
 
-換一批論文、換一份 survey,跑同一條 pipeline 即可;`checks.yaml` 裡的驗收項目(哪些系統該出現在某個集合查詢裡)也是宣告式的,不用改程式碼。
+Point it at a different paper set and a different draft and the same pipeline runs; `checks.yaml`'s acceptance expectations are declarative, not code.
 
 ---
 
-## 動機:一個動工前就存在的真實 finding
+## Motivation: a finding that predates the codebase
 
-本專案要稽核的 survey 中,`AOL` 出現兩個定義:
+The survey this project audits defines `AOL` twice:
 
-- §2.2 —  `AOL = Latency / MLP`,標給 Soar/Alto [4]
-- §3.1 —  `AOL = L_loaded / (1 + α·(MLP−1))`,TierLab(作者自己的模擬器)實作
+- Section 2.2 -- `AOL = Latency / MLP`, attributed to Soar/Alto [4]
+- Section 3.1 -- `AOL = L_loaded / (1 + alpha*(MLP-1))`, TierLab's (the author's own simulator) implementation
 
-兩份 LLM 產出的規劃文件都把第二式寫成「原論文的公式」。實際查 Soar/Alto (OSDI'25) p4 原文:
+Two LLM-drafted planning documents both described the second form as "the original paper's formula." The actual source, Soar/Alto (OSDI'25), p4:
 
 > we define AOL = Latency / MLP
 
-第一式才是原文定義。而 α=1 時 `1+1·(MLP−1) = MLP`,第二式精確退化成第一式——所以兩者不矛盾,是**未言明的推廣**。
+The first form is the one the source actually defines. And at alpha=1, `1+1*(MLP-1) = MLP` -- the second form reduces exactly to the first. So the two aren't contradictory; the second is an unstated generalization of the first.
 
-正解不是「A 對 B 錯」,而是回報:同一符號兩處定義不同、關係未說明、其中一處是作者自身實作而非原論文定義。這需要第五類判定 `underspecified`。
+The correct output isn't "A is right, B is wrong." It's: the same symbol is defined twice, the relationship between the two definitions is never stated, and one of them is the author's own implementation rather than the cited paper's definition. That needs a fifth verdict class, `underspecified`, alongside supported / contradicted / not_found / condition_mismatch.
 
 ---
 
-## 不能弄錯的四件事
+## Four things this system cannot get wrong
 
-1. **單一模型、單一索引。** `ask` 與 `check` 用同一個模型、同一個索引,差別只在 query 怎麼構造、檢索範圍怎麼限定。**沒有任何 fine-tune。**
-2. **check 的檢索必須有 scope。** 無引用的 claim 走全域檢索時**強制排除 tier-0**,否則會拿 survey 自己的敘述驗證 survey 自己,系統看似運作正常但結果無意義。
-3. **表格不進向量庫。** 「哪些系統支援 2 MB」要的是完整集合;語意相似度只會回傳最像的幾筆,然後靜靜漏掉其餘的。集合型查詢走 `tables/*.json` 的 filter。
-4. **eval ground truth 不可由模型產生。** `eval/eval_set.jsonl` 全部人工從原文核對,`eval/validate_eval_set.py` 會再用程式重新驗證一次。
+1. **One model, one index.** `ask` and `check` share the same model and the same index; the only difference is how the query is built and how the search is scoped. No fine-tuning anywhere.
+2. **`check`'s retrieval must be scoped.** An uncited claim searched globally is searched with tier-0 explicitly excluded -- otherwise the tool can retrieve the survey's own restatement of a claim and use it to "confirm" that same claim, which looks like it's working while proving nothing.
+3. **Tables never enter the vector index.** A query like "which systems support 2 MB pages" needs the complete set; semantic similarity returns the closest few matches and silently drops the rest. Set-shaped queries go through a filter over `tables/*.json` instead.
+4. **Eval ground truth is never model-generated.** Every item in `eval/eval_set.jsonl` was checked by hand against the source PDFs; `eval/validate_eval_set.py` re-verifies it independently, in code.
 
 ---
 
@@ -47,101 +47,101 @@ python3 corpus.py init ~/papers --out ~/my-review \
 
 ```
 papers/*.pdf
-   │
-   ├─ parse.py           座標法解析 → blocks.jsonl
-   │                     x 分欄、y 分列;表格用第一欄當 row anchor
-   ├─ quality_check.py   純規則品質閘門 → quality_report.json
-   ├─ vision_verify.py   視覺複查(附通道健康檢查)→ vision_report.jsonl
-   ├─ build_index.py     三條路徑:向量+BM25 / 表格 JSON / 公式
-   ├─ retrieve.py        Hybrid + reranker + doc_id/tier filter
-   │
-   ├─ ask.py             問句 → 帶出處的回答
-   └─ check.py           段落 → 逐 claim 判定 + 原文 span
+   |
+   |- parse.py           coordinate-based extraction -> blocks.jsonl
+   |                     x splits columns, y splits rows; tables use the
+   |                     first column as a row anchor
+   |- quality_check.py   rule-based quality gate -> quality_report.json
+   |- vision_verify.py   page-image re-check with a channel health check
+   |                     -> vision_report.jsonl
+   |- build_index.py     three paths: vectors+BM25 / table JSON / formulas
+   |- retrieve.py        hybrid search + reranker + doc_id/tier filters
+   |
+   |- ask.py             question -> cited answer
+   `- check.py           passage -> per-claim verdict + source span
 ```
 
-| 檔案 | 作用 |
+| File | Role |
 |---|---|
-| `corpus.py` | `Corpus` 物件 + `init` 子命令。每個模組的語料路徑、doc_id 解析、tier 判斷都經過這裡,程式碼裡不寫死任何一篇論文 |
-| `corpus.yaml` | `ref → doc_id → tier → file`。`check.py` 的 reference resolution 完全依賴這張表 |
-| `checks.yaml` | 這批語料自己的驗收期望(集合查詢該回傳誰、doc_id filter 該收斂到誰)。換語料就換這份宣告,不改 `build_index.py` / `retrieve.py` |
-| `llm.py` | 所有模型呼叫的唯一入口,`LLMProvider` 抽象類別 + 各供應商子類別,供應商可換 |
-| `units.py` | 數值正規化(`54 µs` == `0.054 ms`),**純程式,不經模型** |
-| `eval/eval_set.jsonl` | 39 題人工標註評估集 |
-| `eval/run_baseline.py` | 三組對照實驗 |
+| `corpus.py` | The `Corpus` object plus the `init` bootstrapper. Every module's corpus path, doc_id resolution, and tier lookup goes through this; no paper is named in pipeline code. |
+| `corpus.yaml` | `ref -> doc_id -> tier -> file`. `check.py`'s reference resolution depends on this table entirely. |
+| `checks.yaml` | This corpus's own acceptance expectations (what a set query should return, what a doc_id filter should converge to). Swapping corpora means editing this file, not `build_index.py` / `retrieve.py`. |
+| `llm.py` | The single entry point for every model call. An abstract `LLMProvider` plus one subclass per backend; the backend is swappable. |
+| `units.py` | Deterministic numeric normalization (`54 us` == `0.054 ms`) -- plain code, never routed through a model. |
+| `eval/eval_set.jsonl` | Hand-annotated evaluation set spanning answerable, refusal, and misattribution-trap questions. |
+| `eval/run_baseline.py` | Three-arm comparison harness (no retrieval / unfiltered retrieval / this system). |
 
-`tier` 0 = survey 本身(二手轉述),1 = 原文(一手)。
+`tier` 0 = the survey itself (secondhand paraphrase), 1 = an original source.
 
 ---
 
-## 兩個實際用途
+## Two real workflows
 
-### (1) 寫 survey 時快速查找
+### 1. Fast lookup while writing
 
 ```bash
 python3 refcheck.py
 ```
 
-互動式,模型只載入一次(約 16 秒),之後每次查詢約 0.5 秒。
-一次性 CLI 每次都要付 16 秒冷啟動,所以查找一律用這個。
+An interactive session: the retrieval models load once (~16s), then every query after that is sub-second (~0.5s). A one-shot CLI call would pay that ~16s model-load cost on every single question, which is why lookup always goes through this instead.
 
 ```
-> how much does a page migration cost        直接檢索,不需 API key
-> /doc m5                                    限定只看 M5
+> how much does a page migration cost        direct search, no API key needed
+> /doc m5                                    restrict to one document
 > sparse page word level tracking
-> /tier 1                                    只看原文,排除 survey 轉述
-> /tables 2mb                                表格集合查詢(完整集合)
-> /ask what penalty does TierLab use         生成帶出處的回答(需 key)
+> /tier 1                                    originals only, survey excluded
+> /tables 2mb                                set query over the table layer
+> /ask what penalty does TierLab use         generated answer with citations (needs a key)
 ```
 
-**檢索不需要 API key。** 多數時候看到段落本身、頁碼與 section 就夠了。
+**Search works without an API key.** Most of the time, seeing the passage itself with its page and section is the whole answer.
 
-### (2) 寫完後校對
+### 2. Proofreading a finished draft
 
 ```bash
 python3 check.py --file draft.docx
 ```
 
-直接吃 `.docx` / `.pdf` / `.txt`,不必先另存純文字。流程:切段 → 逐條抽 claim →
-解析引用 → 鎖定該篇檢索 → 判定 → 附原文 span。
+Takes `.docx` / `.pdf` / `.txt` directly, no manual export step. Pipeline: split into paragraphs -> extract claims -> resolve citations -> retrieve within scope -> adjudicate -> attach the original span.
 
-報告**預設只顯示有問題的**,並依嚴重度排序:
+The report shows only what needs attention by default, ranked by severity:
 
 ```
-contradicted → not_found → condition_mismatch → underspecified
-→ possibly_missing_citation → unresolvable_reference
+contradicted -> not_found -> condition_mismatch -> underspecified
+-> possibly_missing_citation -> unresolvable_reference
 ```
 
-`--all` 連通過的一起列,`--limit N` 只跑前 N 段。
+`--all` also lists claims that checked out; `--limit N` restricts to the first N paragraphs.
 
-單段校對:
+Single-passage check:
 
 ```bash
-python3 check.py --text "Colloid achieves 1.01–1.76× speedup [3]."
+python3 check.py --text "Colloid achieves 1.01-1.76x speedup [3]."
 ```
 
 ---
 
-## 執行
+## Running it
 
 ```bash
-python3 parse.py                      # PDF → blocks.jsonl
+python3 parse.py                      # PDFs -> blocks.jsonl
 ```
 ```bash
-python3 quality_check.py              # 規則閘門,輸出待複查頁清單
+python3 quality_check.py              # rule-based gate; lists pages needing review
 ```
 ```bash
-python3 build_index.py --selftest     # 建索引 + Module C 驗收
+python3 build_index.py --selftest     # build the index and run its acceptance check
 ```
 ```bash
-python3 retrieve.py --acceptance      # Module D 驗收
+python3 retrieve.py --acceptance      # retrieval-layer acceptance check
 ```
 ```bash
-python3 eval/validate_eval_set.py     # 驗證評估集本身
+python3 eval/validate_eval_set.py     # verify the eval set itself
 ```
 
-以上皆為本地執行,不需 API key。
+Everything above runs fully offline, no API key required.
 
-生成層需要設定 provider(預設 DeepSeek):
+The generation layer needs a provider configured (default: DeepSeek):
 
 ```bash
 export DEEPSEEK_API_KEY=...
@@ -150,17 +150,17 @@ export DEEPSEEK_API_KEY=...
 python3 ask.py "What migration penalty does TierLab charge?"
 ```
 ```bash
-python3 check.py --self-audit         # 拿系統審自己的 survey
+python3 check.py --self-audit         # run the system against its own tier-0 document
 ```
 ```bash
 python3 eval/run_baseline.py --arms none raw system --repeats 3
 ```
 
-檢索層(embedding / BM25 / reranker)全部本地離線執行。
+The retrieval layer (embedding model, BM25, reranker) runs entirely local and offline regardless of provider.
 
-### 視覺複查
+### Visual re-check
 
-`vision_verify.py` 需要 vision-capable provider。DeepSeek 無 vision 模型,`llm.py` 會**明確報錯**而非把圖悄悄丟掉:
+`vision_verify.py` needs a vision-capable provider. DeepSeek has no vision model, and `llm.py` raises an explicit error rather than silently dropping the image:
 
 ```bash
 REFCHECK_PROVIDER=openai python3 vision_verify.py
@@ -168,11 +168,11 @@ REFCHECK_PROVIDER=openai python3 vision_verify.py
 
 ---
 
-## 通道健康檢查(為什麼需要)
+## Channel health check, and why it exists
 
-視覺通道可能靜默失敗:影像沒送達,但呼叫成功返回,模型照樣輸出一份看似正常的比對報告。
+A vision call can succeed at the transport level while the image never actually arrives, and the model will still produce a fluent, confident-looking comparison report from the text alone.
 
-實測(2026-07-30,同一 prompt 但拿掉 `images` 欄位):
+A controlled test (same prompt, `images` field removed) demonstrated exactly that:
 
 ```json
 {
@@ -183,12 +183,12 @@ REFCHECK_PROVIDER=openai python3 vision_verify.py
 }
 ```
 
-模型宣稱「影像顯示」某內容——**它從未看到任何影像**。
+The model asserted what an image "showed" -- an image it never received.
 
-作法:每次呼叫在圖左上角疊一個隨機 token,要求模型先回報。答不出即判定影像未送達,該頁 `channel_failed_needs_human`,並**丟棄該次所有 finding**。
+The fix: every call overlays a random token on the rendered page and the model must report it back before anything else. Failing to reproduce the token means the image never arrived; the page is marked `channel_failed_needs_human` and every finding from that call is discarded rather than trusted.
 
 ---
 
-## 現況
+## Current state
 
-Phase 1 的 A–G 已完成並通過各自驗收;H 的程式碼完成,實驗待 API key。詳見 [results.md](results.md)。
+The extraction, quality-gate, indexing, retrieval, ask, and check layers are implemented and pass their respective acceptance checks locally, without any API key. The three-arm comparison harness (`eval/run_baseline.py`) is implemented and ready to run against a configured provider; see [results.md](results.md) for what's been validated so far and what's still open.

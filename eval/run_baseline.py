@@ -47,7 +47,7 @@ EVAL_PATH = ROOT / "eval" / "eval_set.jsonl"
 RESULTS_PATH = ROOT / "eval" / "baseline_results.jsonl"
 
 REFUSAL_MARKERS = [
-    "not stated", "資料未提及", "does not", "do not contain", "no information",
+    "not stated", "does not", "do not contain", "no information",
     "not mentioned", "not provided", "cannot determine", "not found",
     "unable to", "not specified", "no such", "not report",
 ]

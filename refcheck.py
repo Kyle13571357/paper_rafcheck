@@ -33,16 +33,16 @@ from corpus import load_corpus
 
 ROOT = Path(__file__).parent
 
-BANNER = """paper-refcheck  —  查找與校對
+BANNER = """paper-refcheck -- lookup & proofreading
 
-  <問題>            檢索原文段落(不需 API key)
-  /ask <問題>       生成帶出處的回答（需 API key）
-  /check <文字>     逐條 claim 比對原文（需 API key）
-  /tables <pattern> 表格集合查詢，例如 /tables 2mb
-  /doc <id|off>     限定單篇，例如 /doc m5
-  /tier <0|1|off>   0=survey 轉述, 1=原文
-  /k <n>            回傳筆數（預設 6）
-  /docs             列出 corpus
+  <question>        search the source text (no API key needed)
+  /ask <question>    generated answer with citations (needs API key)
+  /check <text>      verify each claim in the text against sources (needs API key)
+  /tables <pattern>  set query over the table layer, e.g. /tables 2mb
+  /doc <id|off>      restrict to one document, e.g. /doc m5
+  /tier <0|1|off>    0 = survey's own paraphrase, 1 = original sources
+  /k <n>             number of results to return (default 6)
+  /docs              list the registered corpus
   /help  /quit
 """
 
@@ -59,9 +59,9 @@ def short_id(corpus, fragment):
     if len(hits) == 1:
         return hits[0]
     if len(hits) > 1:
-        print(f"  '{fragment}' 對應多筆: {hits}")
+        print(f"  '{fragment}' matches multiple: {hits}")
         return None
-    print(f"  找不到 '{fragment}'（用 /docs 看清單）")
+    print(f"  no match for '{fragment}' (see /docs for the list)")
     return None
 
 
@@ -69,13 +69,13 @@ def fmt_hit(i, h, corpus_by_id, width=320):
     meta = corpus_by_id.get(h["doc_id"], {})
     pages = (f"p{h['page_start']}" if h["page_start"] == h["page_end"]
              else f"p{h['page_start']}-{h['page_end']}")
-    tier = "tier-0 轉述" if h["tier"] == 0 else "tier-1 原文"
-    section = h.get("section") or "—"
+    tier = "tier-0 paraphrase" if h["tier"] == 0 else "tier-1 original"
+    section = h.get("section") or "--"
     text = re.sub(r"\s+", " ", h["text"]).strip()
     if len(text) > width:
-        text = text[:width] + "…"
-    print(f"\n[{i}] {meta.get('short', h['doc_id'])} · {tier} · {pages}")
-    print(f"    §{section}")
+        text = text[:width] + "..."
+    print(f"\n[{i}] {meta.get('short', h['doc_id'])} . {tier} . {pages}")
+    print(f"    section: {section}")
     print(f"    {text}")
 
 
@@ -89,19 +89,19 @@ def main():
     corpus_by_id = cor.by_doc_id
 
     print(BANNER)
-    print("載入檢索模型…", end="", flush=True)
+    print("loading retrieval models...", end="", flush=True)
     t0 = time.time()
     from retrieve import Retriever, query_tables
     r = Retriever(cor)
     r.search("warmup", k=1)          # force the lazy model loads now, not mid-question
-    print(f" 完成（{time.time() - t0:.0f}s，之後每次查詢約 0.5s）\n")
+    print(f" done ({time.time() - t0:.0f}s; ~0.5s per query after this)\n")
 
     import llm
     cfg = llm.config()
-    has_key = bool(cfg["api_key"]) or cfg["provider"] == "ollama"
+    has_key = cfg["ready"]
     if not has_key:
-        print(f"注意：{cfg['key_env']} 未設定 → /ask 與 /check 無法使用，"
-              f"檢索功能不受影響。\n")
+        print(f"note: {cfg['key_env']} is not set, so /ask and /check are "
+              f"unavailable. Plain search still works.\n")
 
     state = {"doc": None, "tier": None, "k": 6}
 
@@ -137,12 +137,12 @@ def main():
         if m:
             if m.group(1) in ("off", "none", "-"):
                 state["doc"] = None
-                print("  已取消 doc 限定")
+                print("  doc filter cleared")
             else:
                 d = short_id(corpus, m.group(1))
                 if d:
                     state["doc"] = d
-                    print(f"  限定 {d}")
+                    print(f"  restricted to {d}")
             continue
 
         m = re.match(r"^/tier\s+(\S+)$", line)
@@ -150,13 +150,14 @@ def main():
             v = m.group(1)
             if v in ("off", "none", "-"):
                 state["tier"] = None
-                print("  已取消 tier 限定")
+                print("  tier filter cleared")
             elif v in ("0", "1"):
                 state["tier"] = int(v)
-                print(f"  限定 tier {v}" + ("（survey 自身轉述）" if v == "0"
-                                            else "（原文）"))
+                print(f"  restricted to tier {v}" +
+                      (" (the survey's own paraphrase)" if v == "0"
+                       else " (original sources)"))
             else:
-                print("  用法：/tier 0 | /tier 1 | /tier off")
+                print("  usage: /tier 0 | /tier 1 | /tier off")
             continue
 
         m = re.match(r"^/k\s+(\d+)$", line)
@@ -170,19 +171,19 @@ def main():
             rows = query_tables(m.group(1).strip(), doc_id=state["doc"],
                                 tier=state["tier"], corpus=cor)
             if not rows:
-                print("  表格層無相符列")
+                print("  no matching rows in the table layer")
             for h in rows:
-                flag = f"  ⚠ {h['quality_flag']}" if h.get("quality_flag") else ""
+                flag = f"  [flagged: {h['quality_flag']}]" if h.get("quality_flag") else ""
                 print(f"  {h['doc_id']} p{h['page']} | {h['row_label']} | "
                       f"{h['column']} = {h['value']!r}{flag}")
-            print(f"\n  共 {len(rows)} 列（完整集合，非 top-k）")
+            print(f"\n  {len(rows)} row(s) -- the complete set, not a top-k")
             continue
 
         m = re.match(r"^/(ask|check)\s+(.+)$", line, re.S)
         if m:
             verb, payload = m.group(1), m.group(2).strip()
             if not has_key:
-                print(f"  需要 {cfg['key_env']}。純檢索請直接輸入問題。")
+                print(f"  requires {cfg['key_env']}. Plain search works without it.")
                 continue
             try:
                 if verb == "ask":
@@ -193,21 +194,21 @@ def main():
                     from check import check_passage, render as render_check
                     render_check(check_passage(payload, retriever=r, k=state["k"]))
             except Exception as e:                      # noqa: BLE001
-                print(f"  失敗：{type(e).__name__}: {e}")
+                print(f"  failed: {type(e).__name__}: {e}")
             continue
 
         if line.startswith("/"):
-            print("  未知指令,/help 看說明")
+            print("  unknown command, see /help")
             continue
 
         t = time.time()
         hits = r.search(line, k=state["k"], doc_id=state["doc"], tier=state["tier"])
         if not hits:
-            print("  沒有命中")
+            print("  no matches")
             continue
         for i, h in enumerate(hits, 1):
             fmt_hit(i, h, corpus_by_id)
-        print(f"\n  {len(hits)} 筆 · {time.time() - t:.1f}s")
+        print(f"\n  {len(hits)} result(s) . {time.time() - t:.1f}s")
 
     print("bye")
 

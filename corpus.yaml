@@ -1,7 +1,9 @@
-# 文件註冊表:ref → doc_id → tier → file
-# ref 對應 cs550_survey.pdf 參考文獻列表 [1]-[12] 的編號,已與該文件 References 段落核對一致
-# tier: 0 = survey 本身(二手轉述),1 = 原文(一手)
-# check.py 的 reference resolution 完全依賴這張表——改動前先確認沒有下游程式碼寫死了舊的 doc_id
+# Document registry: ref -> doc_id -> tier -> file
+# ref matches the numbering [1]-[12] in cs550_survey.pdf's own References
+# section, cross-checked against that document.
+# tier: 0 = the survey itself (secondhand paraphrase), 1 = original source
+# check.py's reference resolution depends entirely on this table -- before
+# changing it, confirm no downstream code hard-codes an old doc_id.
 
 - ref: 0
   doc_id: cs550_survey

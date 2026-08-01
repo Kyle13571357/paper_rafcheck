@@ -1,195 +1,195 @@
 # Results
 
-狀態記錄於 2026-07-30。
+State as of 2026-07-30.
 
-**重要區分:** 本文件分成兩部分。第一部分是**已實測**的結果,全部由確定性程式產生,不經任何模型。第二部分是**尚未執行**的模型對照實驗——程式碼完成,等 API key。沒有任何數字是想像填寫的。
+**Important distinction:** this document has two parts. Part 1 is **already measured** -- every number here comes from deterministic code, no model involved. Part 2 is the **not-yet-run** model comparison experiment -- code complete, waiting on an API key. No number below is invented.
 
 ---
 
-## Part 1 — 已實測(確定性,無模型)
+## Part 1 -- Measured (deterministic, no model)
 
 ### Corpus
 
-| 項目 | 數量 |
+| Item | Count |
 |---|---|
-| 文件 | 13(tier-0 survey ×1,tier-1 原文 ×12) |
-| 頁數 | 216 |
-| blocks | 8,529 |
-| chunks | 1,238 |
-| 表格(結構化層,不進向量庫) | 88 |
-| 公式 | 11 |
+| Documents | 13 (1 tier-0 survey, 12 tier-1 originals) |
+| Pages | 216 |
+| Blocks | 8,529 |
+| Chunks | 1,238 |
+| Tables (structured layer, not embedded) | 88 |
+| Formulas | 11 |
 
-blocks 分佈:prose 7,974 / heading 271 / caption 185 / table 88 / formula 11。
+Block breakdown: prose 7,974 / heading 271 / caption 185 / table 88 / formula 11.
 
-### Module A 驗收 — 解析正確性
+### Module A acceptance -- parsing correctness
 
-- **survey Table 1 十二列全對**,含多行 cell 與跨列換行的 `(policy-agnostic)`。
-- **AOL 公式確定性還原**,無需視覺模型:
-  `AOL = L_loaded / (1+α∙(MLP−1))`
-  三步:U+1D400 區段正規化回 ASCII、span `size` 判上下標、drawing rect 細長橫線判分數線。
-- 文字覆蓋率(擷取字元 / PDF 原始字元)中位數 **0.988**、平均 **0.985**;唯一低於 0.80 的頁是一頁僅 154 字元的短頁,差額正是刻意濾除的 running header。
+- **All 13 rows of the survey's Table 1 correct**, including multi-line cells and a `(policy-agnostic)` value wrapped across a row boundary.
+- **AOL formula reconstructed deterministically**, no vision model needed:
+  `AOL = L_loaded / (1+alpha*(MLP-1))`
+  Three steps: normalize the U+1D400 range back to ASCII, classify sub/superscript by span `size`, classify a thin horizontal drawing rect as a fraction bar.
+- Text coverage (extracted characters / raw PDF characters): median **0.988**, mean **0.985**. The one page below 0.80 is a 154-character page whose entire shortfall is the running header, deliberately filtered.
 
-### Module B 驗收 — 品質閘門
+### Module B acceptance -- quality gate
 
-| 指標 | 值 |
+| Metric | Value |
 |---|---|
-| 總頁數 | 216 |
-| 規則 flag 頁數 | 44(20.4%) |
-| 需視覺複查頁數 | 74(34.3%) |
+| Total pages | 216 |
+| Pages flagged by rules | 44 (20.4%) |
+| Pages routed to visual review | 74 (34.3%) |
 
-flag 分佈:`misencoded_unit` 97(blocker)、`paragraph_split_mid_sentence` 37(info)、`table_parse_flag` 28、`table_ragged_rows` 7、`table_empty_row` 1。
+Flag breakdown: `misencoded_unit` 97 (blocker), `paragraph_split_mid_sentence` 37 (info), `table_parse_flag` 28, `table_ragged_rows` 7, `table_empty_row` 1.
 
-`bbox_crosses_gutter` **0 次**——這條檢查與 `parse.py` 的分欄邏輯互相獨立,零命中代表分欄決策自洽。
+`bbox_crosses_gutter`: **0 hits** -- this check is independent of `parse.py`'s column-splitting logic, so zero hits means the column decisions are self-consistent.
 
-`misencoded_unit` 是後來才加的規則,見下方「單位編碼損毀」一節;加入後複查頁數由 60 升至 74。
+`misencoded_unit` was added later (see "Mis-encoded units" below); adding it raised the review queue from 60 to 74 pages.
 
-### Module C 驗收 — 集合查詢完整性
+### Module C acceptance -- set-query completeness
 
-> 「哪些系統支援 2 MB THP」
+> "Which systems support 2 MB THP?"
 
 ```
 MTM          granularity='2 MB (THP)'   (cs550_survey p5)
 NOMAD        granularity='4 KB / 2 MB'  (cs550_survey p5)
 NeoMem       granularity='4 KB / 2 MB'  (cs550_survey p3)
-RESULT: PASS — nothing missing
+RESULT: PASS -- nothing missing
 ```
 
-關鍵:NeoMem 的欄位寫的是 `4 KB / 2 MB`,字面搜尋 `"2 MB THP"` **只會找到 MTM**。正規化成 `2mb` token 後三筆齊全。這正是表格不進向量庫的理由。
+The point: NeoMem's cell reads `4 KB / 2 MB`. A literal search for `"2 MB THP"` finds **only MTM**. Normalizing to a `2mb` token recovers all three. This is the actual reason tables never enter the vector index.
 
-### Module D 驗收 — 檢索範圍收斂
+### Module D acceptance -- retrieval scope convergence
 
-同一 query `"page migration latency cost microseconds"`:
+Same query, `"page migration latency cost microseconds"`:
 
-| 條件 | 結果 |
+| Condition | Result |
 |---|---|
-| 無 filter | 命中散佈於 6 個不同 doc |
-| `doc_id=m5_asplos25` | 8/8 全部來自 M5 |
-| `exclude_tier=0` | 剩餘 tier 僅 `[1]`,survey 完全排除 |
-| 表格 filter `2mb` | `['MTM','NOMAD','NeoMem']` |
+| No filter | hits spread across 6 different docs |
+| `doc_id=m5_asplos25` | 8/8 all from M5 |
+| `exclude_tier=0` | remaining tiers are `[1]` only, survey fully excluded |
+| Table filter `2mb` | `['MTM','NOMAD','NeoMem']` |
 
-### Module G — scope 決策(確定性部分)
+### Module G -- scope decisions (the deterministic part)
 
-| 情境 | 決策 |
+| Scenario | Decision |
 |---|---|
-| `[9]` | 鎖定 `m5_asplos25` |
-| `[3, 9]` 複合引用 | 鎖定 `['colloid_sosp24','m5_asplos25']` |
-| `[3, 99]` 部分無效 | 鎖定 `colloid_sosp24`,標記 `partially_resolved:[99]` |
-| `[99]` 無效 | `unresolvable_reference` |
-| 無引用 + 作者自身結果 | `skip` |
-| 無引用 + 疑似轉述 | 全域檢索,**`exclude_tier=0`** |
+| `[9]` | locked to `m5_asplos25` |
+| `[3, 9]` compound citation | locked to `['colloid_sosp24','m5_asplos25']` |
+| `[3, 99]` partially invalid | locked to `colloid_sosp24`, flagged `partially_resolved:[99]` |
+| `[99]` invalid | `unresolvable_reference` |
+| No citation + author's own result | `skip` |
+| No citation + apparent paraphrase of others | global search, **`exclude_tier=0`** |
 
-### 最重要的一筆:單位編碼損毀,以及它如何騙過我自己
+### The single most important item: mis-encoded units, and how it fooled me too
 
-`check.py` 的 `numeric_prescreen` 不經模型,只做單位正規化後的數值比對:
+`check.py`'s `numeric_prescreen` never touches a model -- it's unit normalization followed by a numeric comparison, in code:
 
 ```
-M5          value='54 µs'      → scope ['m5_asplos25']  → NOT FOUND   ← 偽陰性
-Colloid     value='1.01-1.76x' → scope ['colloid_sosp24'] → FOUND '1.76' p10
-Telescope   value='90%'        → scope ['telescope_atc24'] → FOUND p2
-Adaptive    value='72.0%'      → scope ['adaptive_migration_arxiv25'] → FOUND p12
+M5          value='54 us'      -> scope ['m5_asplos25']  -> NOT FOUND   <- false negative
+Colloid     value='1.01-1.76x' -> scope ['colloid_sosp24'] -> FOUND '1.76' p10
+Telescope   value='90%'        -> scope ['telescope_atc24'] -> FOUND p2
+Adaptive    value='72.0%'      -> scope ['adaptive_migration_arxiv25'] -> FOUND p12
 ```
 
-第一列是**偽陰性**,而且我一度把它當成 survey 的引用錯誤寫進本文件與評估集。實際上 M5 p12 白紙黑字寫著:
+The first row is a **false negative** -- and at one point I treated it as a citation error in the survey and wrote that conclusion into this document and the eval set. M5 p12 states, in plain text:
 
 > This is not enough of the number of accesses to amortize the cost of page migration
-> (~54µs in our setup), which requires more than 318 accesses (= 54µs/(270ns − 100ns)) on average.
+> (~54us in our setup), which requires more than 318 accesses (= 54us/(270ns - 100ns)) on average.
 
-**survey 的引用是正確的。** 錯的是解析與我的查證方法。
+**The survey's citation is correct.** What was wrong was the extraction, and my own verification method.
 
-**成因:** M5 以 `LibertineMathMI` 排版單位,而該字型的 ToUnicode 表映射錯誤:
+**Root cause:** M5 sets units in `LibertineMathMI`, whose ToUnicode table maps to the wrong codepoints:
 
-| 原文字元 | 文字層實際碼位 |
+| Source character | Actual codepoint in the text layer |
 |---|---|
-| `µ` | U+1D44D MATHEMATICAL ITALIC CAPITAL Z |
+| `u` (micro) | U+1D44D MATHEMATICAL ITALIC CAPITAL Z |
 | `n` | U+1D43F (L) |
 | `s` | U+1D440 (M) |
 
-於是 `54 µs` 抽出來是 `54𝑍𝑀`,經 `parse.py` 的 U+1D400 正規化後變成字面乾淨的 **`54ZM`**;`270 ns` 變成 `270LM`。
+So `54 us` extracts as `54ZM` (mathematical-alphabet codepoints); after `parse.py`'s U+1D400 normalization it becomes the literal, clean-looking string **`54ZM`**; `270 ns` becomes `270LM`.
 
-**為什麼這是最危險的一類:** 文字層解碼**沒有任何錯誤**——沒有 replacement character、沒有 CID 亂碼、正規化後是合法英文字母。編碼檢查抓不到,而任何用「µs」為關鍵字的查詢永遠不會命中。值明明在,看起來正常,卻是隱形的。
+**Why this is the most dangerous failure class:** the text layer decodes **without any error** -- no replacement character, no CID garble, and the normalized output is valid English letters. No encoding check catches it, and any query using "us"/"microsecond" as a keyword will never match. The value is genuinely present and looks completely normal, yet is invisible to search.
 
-**全 corpus 普查:97 處、8/12 篇論文**受影響(MTM `40𝑘𝑈`、M5 `140–170𝐿𝑀`、Chrono `5.5𝐿𝑀𝑁𝑂𝑃`、NeoMem `2.3×2.3𝑚𝑚`⋯)。
+**Corpus-wide census: 97 sites, 8 of 12 papers** affected (MTM's `40kU`, M5's `140-170LM`, Chrono's `5.5LMNOP`, NeoMem's `2.3x2.3mm`, and others).
 
-**連帶暴露的方法論缺陷:** 我原本的 `validate_eval_set.py` 用**同一條 regex** 去「複查」這個缺席主張,於是複查通過。用同一個方法驗證同一個方法,證明不了任何事。現已改為偵測「數字後接 U+1D400 區段字元」,命中時警告「此類數量的缺席主張必須看渲染頁面,不能看文字層」。
+**A methodological flaw this exposed:** my original `validate_eval_set.py` "re-verified" this absence claim using **the exact same regex**, so the re-check passed. Verifying a method with the same method proves nothing. It now detects "a digit immediately followed by U+1D400-range characters" and, on a hit, warns that any absence claim about that quantity must be checked against the rendered page, not the text layer.
 
-**發現途徑:** 使用者直接看渲染後的 PDF 頁面,一眼看出數字就在那裡。這正好從反面驗證了 B2 視覺複查的設計——**圖像通道能救回文字通道丟失的東西**,而 `misencoded_unit` 現在以 blocker 等級把這 97 處全部送進視覺複查佇列。
+**How it was actually found:** the author looked directly at the rendered PDF page and saw the number was right there. This is the clearest possible case for the B2 visual re-check design -- **the image channel can recover what the text channel silently lost** -- and `misencoded_unit` now routes all 97 sites into the visual review queue at blocker severity.
 
-修正紀錄:評估集 `C05` / `C08` / `S02` / `S04` 全部反向,新增 `S06` 記錄真正的缺陷(在語料,不在 survey),`B03` 換成真正不存在的問題。
+Correction log: eval-set items `C05` / `C08` / `S02` / `S04` were all reversed; `S06` was added to record the actual defect (in the corpus, not the survey); `B03` was replaced with a genuinely absent fact.
 
-### 稽核過程中發現的原文瑕疵
+### Real defects found in the source papers during audit-set construction
 
-**Adaptive Migration (ref 5) 自相矛盾。** friendly / unfriendly 標籤在兩處對調:
+**Adaptive Migration (ref 5) contradicts itself.** The friendly/unfriendly labels are swapped between two passages:
 
-- p2:migration-**unfriendly** → 14.8%;migration-**friendly** → 36.0%
-- p12:14.8% 「with migration-**friendly** workloads」;36.0% 「with migration-**unfriendly** workloads」
+- p2: migration-**unfriendly** -> 14.8%; migration-**friendly** -> 36.0%
+- p12: 14.8% "with migration-**friendly** workloads"; 36.0% "with migration-**unfriendly** workloads"
 
-p2 才是邏輯自洽的版本(關掉遷移應該幫助「遷移有害」的工作負載)。survey 採用 p2 的說法,是對的。這筆是建評估集時查原文查出來的,已收為 `C06`,正解是**回報歧義**而非選邊。
+p2 is the internally consistent version (turning migration off should help workloads that migration hurts). The survey follows p2, correctly. This was found while building the eval set by checking the original paper directly; it's recorded as `C06`, and the correct output is to **report the ambiguity**, not pick a side.
 
-**Colloid 的條件被省略。** 原文 p11:
+**Colloid's condition was dropped.** The original, p11:
 
-> even at the maximum alternate tier unloaded latency (2.7× of default tier), Colloid still achieves 1.01–1.76×, 1.03–1.76× and 1.01–1.63× performance improvement for HeMem, TPP and MEMTIS, respectively
+> even at the maximum alternate tier unloaded latency (2.7x of default tier), Colloid still achieves 1.01-1.76x, 1.03-1.76x and 1.01-1.63x performance improvement for HeMem, TPP and MEMTIS, respectively
 
-survey §2.2 壓縮成「Achieves 1.01–1.76× speedup」——數值正確,條件(2.7× 的 alternate tier latency、僅 HeMem)全部消失。典型 `condition_mismatch`。
+The survey's section 2.2 compresses this to "Achieves 1.01-1.76x speedup" -- the number is correct, and every qualifying condition (2.7x alternate-tier latency, HeMem only) is gone. A textbook `condition_mismatch`.
 
-### 視覺通道健康檢查 — 實測驗證其必要性
+### Vision channel health check -- verified by test, not assumed
 
-拿掉 `images` 欄位、其餘完全相同的負向對照:
+A negative control: same prompt, `images` field removed, everything else identical.
 
-模型回傳了一份**完整且自信**的報告——包含一句 `page_summary`("A table with three columns: System, Profiling, and Objective")與一筆 discrepancy,其 `image_shows` 欄位聲稱頁面顯示了什麼。**它從未收到任何影像。**
+The model returned a **complete, confident** report -- a `page_summary` sentence ("A table with three columns: System, Profiling, and Objective") and a discrepancy whose `image_shows` field asserted what the page displayed. **It never received any image.**
 
-token 檢查抓到了:回報 `NONE` ≠ 預期 token → `channel_ok: false` → `channel_failed_needs_human`,該次所有 finding 丟棄。
+The token check caught it: reported `NONE` != expected token -> `channel_ok: false` -> `channel_failed_needs_human`, and every finding from that call was discarded.
 
-這不是假想風險,是實測到的行為。
+This isn't a hypothetical risk -- it's observed behavior.
 
-### 視覺複查試跑(19/60 頁,已停止)
+### Visual re-check pilot run (19/60 pages, stopped)
 
-本機 7B 視覺模型跑了 19 頁後停止(每頁 200–2200 秒,機器過熱)。剩餘 41 頁待改用雲端 provider。
+The local 7B vision model ran 19 pages before the run was stopped (200-2200s per page, the machine was overheating). The remaining 41 pages are pending a cloud provider.
 
-| 項目 | 值 |
+| Item | Value |
 |---|---|
-| 記錄數 | 19 |
+| Records | 19 |
 | `clean` | 9 |
 | `discrepancies_found` | 4 |
 | `request_failed` | 6 |
-| 通道檢查通過率 | 13/13(所有成功呼叫) |
-| 保留的 discrepancy | 6(major 4 / minor 1 / cannot_verify 1) |
-| 自我一致而濾除的偽陽性 | 32 |
+| Channel-check pass rate | 13/13 (all successful calls) |
+| Discrepancies retained | 6 (4 major / 1 minor / 1 cannot_verify) |
+| False positives filtered (self-agreeing) | 32 |
 
-濾除數(32)遠多於保留數(6):模型很常把「我檢查過而且相符」也填成 discrepancy,`extracted == image_shows` 時直接丟棄。
+The filtered count (32) far exceeds what was kept (6): the model frequently fills the discrepancy template even when it checked a value and found it matched; those get dropped whenever `extracted == image_shows`.
 
-抓到的真實問題包括:
+Real problems it caught:
 
-- `adaptive_migration_arxiv25` p9 **[major]**:Table 2 CXL Memory 頻寬欄位,解析結果是空的 `Read : Write :`,原圖是 `Read : 17.8GB/s, Write : 15.8GB/s`——真實資料遺失。
-- `cs550_survey` p12 **[major]**:`Alternate tier` vs 原圖 `Alternate tier saturated`,多行 cell 被切斷。
-- `cs550_survey` p8 **[major]**:`Migration budget` 列的欄位順序錯置。
+- `adaptive_migration_arxiv25` p9 **[major]**: Table 2's CXL Memory bandwidth column parsed as empty (`Read : Write :`); the actual figure is `Read : 17.8GB/s, Write : 15.8GB/s` -- genuine data loss.
+- `cs550_survey` p12 **[major]**: `Alternate tier` vs. the actual `Alternate tier saturated` -- a multi-line cell cut short.
+- `cs550_survey` p8 **[major]**: column order scrambled in the `Migration budget` row.
 
-其中兩筆與我人工檢視時獨立發現的問題吻合。
+Two of these match problems found independently during manual review.
 
 ---
 
-## Part 2 — 尚未執行
+## Part 2 -- Not yet run
 
-以下需要 `DEEPSEEK_API_KEY`,程式碼已完成:
+The following need `DEEPSEEK_API_KEY`; the code is complete:
 
-- **H1** 三組對照:`none`(無檢索)/ `raw`(未清洗文本檢索)/ `system`(本系統)
-- **H2** 記錄 model 版本、日期、prompt、temperature、n≥3
-- **H3** 指標:numeric exact-match(主)、B 類 refusal rate、C 類 misattribution rate、reference resolution 正確率、context recall
-- **H4** Error analysis
+- **H1** three arms: `none` (no retrieval) / `raw` (retrieval over unfiltered text) / `system` (this pipeline)
+- **H2** records model version, date, prompt, temperature, n>=3
+- **H3** metrics: numeric exact-match (primary), class-B refusal rate, class-C misattribution rate, reference-resolution accuracy, context recall
+- **H4** error analysis
 
-執行:
+Run it:
 
 ```bash
 export DEEPSEEK_API_KEY=... && python3 eval/run_baseline.py --arms none raw system --repeats 3
 ```
 
-`raw` 那組刻意做成「最直覺的第一版」:`page.get_text()` 直接切固定長度、無座標分欄、無 filter、無 reranker。有這組才分得出改善來自「有檢索」還是「解析與 scoping」。
+The `raw` arm is deliberately built as "the most obvious first attempt": `page.get_text()`, fixed-length chunking, no coordinate-based column splitting, no filters, no reranker. Without this arm there's no way to tell whether an improvement comes from retrieval existing at all, or from the parsing and scoping specifically.
 
-**baseline 那組必須真的跑。** 現在的模型遇到不熟的論文很可能直接拒答而非編造;若報告照「自信胡編」的假設寫,而實測是拒答,整個對比會垮。
+**The baseline arm has to actually run.** Current models faced with an unfamiliar paper are quite likely to refuse rather than fabricate; if the report were written on the assumption of "confident fabrication" and the real behavior is refusal, the whole comparison collapses.
 
-### 已知限制(會進 error analysis)
+### Known limitations (destined for error analysis)
 
-1. **Soar/Alto 原文的 AOL 公式抽取不完整。** 原文以堆疊分數呈現(`AOL = Latency` 上,`MLP` 下)且用一般字體,`parse.py` 的公式偵測要求 math 字體或 U+1D400 碼位,因此漏抓,文字層留下 `we define AOL = Latency` 斷句。survey 內的 AOL 公式(CambriaMath)則完整還原。
-2. **114 → 98 頁仍偏碎。** 分欄改用 x0 直方圖後大幅改善,殘餘多為圖表座標標籤與參考文獻頁,屬正常現象而非拼接錯誤。
-3. **`near_figure_caption_possibly_not_a_table`** 這條 flag 精確度普通:`find_tables()` 會把格狀排版的圖標籤誤判為表格。目前靠 flag + 視覺複查兜底,未自動排除。
-4. **視覺複查僅完成 19/74 頁**,且用的是本機 7B 模型;若改用雲端模型補完,須註明兩段方法不同。
-5. **單位編碼損毀目前只偵測、未修復。** 97 處已標為 blocker 並送入視覺複查佇列,但 `blocks.jsonl` 內仍是 `54ZM`,因此「54 µs」這類查詢在 M5 上仍會落空。修復需要從渲染頁面取回真值(視覺通道),或建立 per-font 的還原表;前者較穩健,但要等 vision provider 就緒。這是目前已知**最影響檢索正確性**的缺陷。
+1. **Soar/Alto's own AOL formula extraction is incomplete.** The original renders it as a stacked fraction (`AOL = Latency` over `MLP`) in a regular (non-math) font; `parse.py`'s formula detector requires a math font or a U+1D400-range codepoint, so it misses this one, leaving the text layer with the fragment `we define AOL = Latency`. The survey's own AOL formula (set in CambriaMath) reconstructs completely.
+2. **114 -> 98 pages are still somewhat fragmented.** Switching column splitting to an x0 histogram fixed most of it; what remains is mostly chart axis-label text and reference-list pages, which is expected, not a splicing error.
+3. **`near_figure_caption_possibly_not_a_table` has middling precision.** `find_tables()` sometimes misreads grid-arranged figure labels as a table. Currently caught only by this flag plus visual review, not automatically excluded.
+4. **Visual re-check is only 19/74 pages done**, and used the local 7B model. If the rest is completed on a cloud model, the two batches used different methods and that needs to be noted.
+5. **Mis-encoded units are detected but not repaired.** All 97 sites are flagged at blocker severity and routed to visual review, but `blocks.jsonl` still stores `54ZM` -- so a query for "54 us" still misses in M5. A fix needs either recovering the true value from the rendered page (the vision channel) or a per-font substitution table; the former is more robust but waits on a configured vision provider. This is the known defect with the largest impact on retrieval correctness right now.
