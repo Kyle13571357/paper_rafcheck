@@ -1,194 +1,358 @@
 # paper-refcheck
 
-A retrieval and citation-audit pipeline. Feed it a written passage and it checks each factual claim against the source it cites, surfacing every discrepancy alongside the original text.
+A provenance-aware retrieval tool for auditing quantitative citations in literature surveys.
 
-The system does not adjudicate right or wrong -- it places the suspect claim and its evidence side by side and lets a human decide. That design choice runs through every layer below.
+Writing a survey often requires tracing a cited number, formula, or system
+property back to the original paper. This was already tedious manual work; in
+the LLM era, it is also harder to trust: a fluent draft can preserve a number
+while silently dropping its workload, baseline, unit, or qualifying condition.
 
-**A general tool, not a script tied to one paper set.** The corpus is a `Corpus` object (`corpus.py`); every module reads from it instead of a hard-coded path. Which documents are registered, which one is under audit, and what a correct answer looks like for a set query are all declared in `corpus.yaml` / `checks.yaml`, not hard-coded in the pipeline. The 12 memory-tiering systems papers and the survey auditing them, used throughout this repo, are the test corpus this was validated against -- not the design target.
+`paper-refcheck` is a post-draft evidence-audit tool. It does **not** decide
+whether an entire statement is true. It retrieves source-scoped, page-level
+evidence for narrow claims—numbers, units, formulas, and system properties—so
+that a human reviewer can compare the draft against the cited primary source.
 
-```bash
-python3 corpus.py init ~/papers --out ~/my-review \
-  --bibliography draft.docx --tier0-pdf draft.pdf
+## The problem
+
+A survey claim such as:
+
+> "Colloid achieves 1.01–1.76× speedup [3]."
+
+looks easy to check, but a reviewer still has to:
+
+1. resolve `[3]` in the bibliography;
+2. find and open the correct original paper;
+3. search for the value despite wording differences;
+4. determine whether the number applies under a specific workload, baseline, or
+   hardware configuration;
+5. record the source page and decide whether the survey preserved the relevant
+   condition.
+
+Repeated across dozens of citations, this is slow and error-prone.
+
+LLM-generated drafts make this workflow more important. An LLM may produce a
+fluent paragraph that mixes nearby concepts, cites a secondary paraphrase as if
+it were a primary source, or retains a number while omitting the conditions that
+give that number meaning.
+
+## What this project does
+
+```mermaid
+flowchart LR
+    A[Source PDFs] --> B[Structured JSON corpus]
+    B --> C[Quality checks]
+    C --> D[Hybrid retrieval indexes]
+    E[Survey draft or claim] --> F[Citation resolution]
+    F --> D
+    D --> G[Page-level source evidence]
+    G --> H[Human review]
 ```
 
-Reads every PDF's title, venue, and year off its largest first-page type; parses a draft's reference list and matches each numbered citation back to its file by title overlap; writes a reviewable `corpus.yaml` -- work that otherwise takes an afternoon by hand. Run against this project's own real draft (12 source papers, a `.docx` bibliography): 12/12 citations matched correctly, and the tool correctly declined to force a match for a topically unrelated PDF that happened to sit in the same folder (a cache-partitioning survey, never actually cited), flagging it as unmatched instead of guessing.
+The pipeline:
 
-Point it at a different paper set and a different draft and the same pipeline runs; `checks.yaml`'s acceptance expectations are declarative, not code.
+1. converts source PDFs into structured JSON blocks with document, page,
+   section, and bounding-box provenance;
+2. checks the extracted corpus for known PDF extraction risks;
+3. indexes prose for hybrid retrieval and tables for structured filtering;
+4. resolves a draft citation to its registered source paper;
+5. retrieves a bounded evidence window from that source;
+6. reports the evidence, its location, and a review-oriented verdict.
 
----
+The original PDF remains the final authority. Structured JSON is a reviewable,
+regenerable working corpus. The vector index is only a retrieval accelerator;
+it is not the source of truth.
 
-## Motivation: a finding that predates the codebase
+## This is not a replacement for Ctrl+F
 
-The survey this project audits defines `AOL` twice:
+If a reviewer already knows the correct paper and exact phrase, Ctrl+F is often
+faster and more transparent.
 
-- Section 2.2 -- `AOL = Latency / MLP`, attributed to Soar/Alto [4]
-- Section 3.1 -- `AOL = L_loaded / (1 + alpha*(MLP-1))`, TierLab's (the author's own simulator) implementation
+This project automates the workflow around Ctrl+F:
 
-Two LLM-drafted planning documents both described the second form as "the original paper's formula." The actual source, Soar/Alto (OSDI'25), p4:
+- resolving a citation such as `[9]` to the correct paper;
+- searching across a local collection without manually opening each paper;
+- handling terminology differences between the draft and source;
+- restricting evidence to the cited paper instead of the whole corpus;
+- normalizing comparable numeric units;
+- returning document, page, section, and source tier;
+- surfacing qualifying conditions that may have been omitted;
+- handling complete-set table questions with structured filtering.
 
-> we define AOL = Latency / MLP
+In short: Ctrl+F finds strings. `paper-refcheck` finds reviewable,
+source-scoped evidence for cited quantitative claims.
 
-The first form is the one the source actually defines. And at alpha=1, `1+1*(MLP-1) = MLP` -- the second form reduces exactly to the first. So the two aren't contradictory; the second is an unstated generalization of the first.
+## Scope
 
-The correct output isn't "A is right, B is wrong." It's: the same symbol is defined twice, the relationship between the two definitions is never stated, and one of them is the author's own implementation rather than the cited paper's definition. That needs a fifth verdict class, `underspecified`, alongside supported / contradicted / not_found / condition_mismatch.
+The tool is intentionally narrow.
 
----
+It is designed for claims that can be reviewed against a small local evidence
+window:
 
-## Four things this system cannot get wrong
+- numeric values, units, ratios, and percentages;
+- formulas and single-sentence definitions;
+- system properties and configuration details;
+- table membership and structured comparison facts;
+- conditions attached to reported results.
 
-1. **One model, one index.** `ask` and `check` share the same model and the same index; the only difference is how the query is built and how the search is scoped. No fine-tuning anywhere.
-2. **`check`'s retrieval must be scoped.** An uncited claim searched globally is searched with tier-0 explicitly excluded -- otherwise the tool can retrieve the survey's own restatement of a claim and use it to "confirm" that same claim, which looks like it's working while proving nothing.
-3. **Tables never enter the vector index.** A query like "which systems support 2 MB pages" needs the complete set; semantic similarity returns the closest few matches and silently drops the rest. Set-shaped queries go through a filter over `tables/*.json` instead.
-4. **Eval ground truth is never model-generated.** Every item in `eval/eval_set.jsonl` was checked by hand against the source PDFs; `eval/validate_eval_set.py` re-verifies it independently, in code.
+It does **not** attempt to:
 
----
+- prove that an entire paragraph or paper is true;
+- perform open-ended document summarization;
+- infer missing experimental context;
+- make arithmetic or derived claims not stated in a source;
+- replace expert review.
 
-## Pipeline
+### Atomic claims fit bounded evidence windows
 
+Generic RAG can lose important context when an answer requires reasoning over
+many chunks or a whole document. This project avoids that task class.
+
+It focuses on narrow, reviewable claims whose supporting evidence is usually
+local to a page or a small number of passages. Retrieval still can miss evidence
+because of extraction defects, wording differences, chunk boundaries, or ranking
+errors. Therefore results retain page-level provenance and are presented for
+human review rather than treated as final judgments.
+
+## Design choices
+
+### Citation scope is part of retrieval
+
+A claim with `[9]` is searched within the paper registered as reference 9. An
+uncited claim that appears to paraphrase previous work is searched across
+original papers while excluding the survey itself.
+
+This reduces the risk of using a survey's own restatement as evidence for that
+same survey. It also avoids the cost and attention dilution of placing an entire
+paper collection into an LLM context.
+
+The corpus distinguishes:
+
+- **tier 0**: the survey being audited, which may contain secondhand paraphrases;
+- **tier 1**: original papers cited by the survey.
+
+### Tables use structured retrieval
+
+Tables are not treated as ordinary top-*k* vector-search passages.
+
+A question such as "which systems support 2 MB pages?" requires a complete set.
+Semantic retrieval may return only the most similar rows and silently omit
+others. Parsed tables are therefore queried with deterministic filters over
+structured JSON.
+
+### Numeric comparison is deterministic where possible
+
+`units.py` normalizes comparable quantities, allowing checks such as:
+
+```text
+54 us == 0.054 ms
 ```
-papers/*.pdf
-   |
-   |- parse.py           coordinate-based extraction -> blocks.jsonl
-   |                     x splits columns, y splits rows; tables use the
-   |                     first column as a row anchor
-   |- quality_check.py   rule-based quality gate -> quality_report.json
-   |- vision_verify.py   page-image re-check with a channel health check
-   |                     -> vision_report.jsonl
-   |- build_index.py     three paths: vectors+BM25 / table JSON / formulas
-   |- retrieve.py        hybrid search + reranker + doc_id/tier filters
-   |
-   |- ask.py             question -> cited answer
-   `- check.py           passage -> per-claim verdict + source span
-```
 
-| File | Role |
-|---|---|
-| `corpus.py` | The `Corpus` object plus the `init` bootstrapper. Every module's corpus path, doc_id resolution, and tier lookup goes through this; no paper is named in pipeline code. |
-| `corpus.yaml` | `ref -> doc_id -> tier -> file`. `check.py`'s reference resolution depends on this table entirely. |
-| `checks.yaml` | This corpus's own acceptance expectations (what a set query should return, what a doc_id filter should converge to). Swapping corpora means editing this file, not `build_index.py` / `retrieve.py`. |
-| `llm.py` | The single entry point for every model call. An abstract `LLMProvider` plus one subclass per backend; the backend is swappable. |
-| `units.py` | Deterministic numeric normalization (`54 us` == `0.054 ms`) -- plain code, never routed through a model. |
-| `eval/eval_set.jsonl` | Hand-annotated evaluation set spanning answerable, refusal, and misattribution-trap questions. |
-| `eval/run_baseline.py` | Three-arm comparison harness (no retrieval / unfiltered retrieval / this system). |
+This avoids relying on a model to perform arithmetic or unit conversion.
 
-`tier` 0 = the survey itself (secondhand paraphrase), 1 = an original source.
+### PDF extraction is treated as an evidence risk
 
----
+Academic PDFs can fail silently because of double-column reading order, table
+structure, formulas, superscripts, and font encodings.
 
-## Two real workflows
+The pipeline includes quality checks for conditions such as:
 
-### 1. Fast lookup while writing
+- malformed or misencoded units;
+- incomplete or ragged table rows;
+- paragraph splits;
+- possible layout-order issues;
+- low text coverage.
+
+Flagged content is routed for review rather than silently treated as reliable
+evidence.
+
+## Workflows
+
+### Search a local paper collection
 
 ```bash
 python3 refcheck.py
 ```
 
-An interactive session: the retrieval models load once (~16s), then every query after that is sub-second (~0.5s). A one-shot CLI call would pay that ~16s model-load cost on every single question, which is why lookup always goes through this instead.
-
-```
-> how much does a page migration cost        direct search, no API key needed
-> /doc m5                                    restrict to one document
+```text
+> how much does a page migration cost
+> /doc m5
 > sparse page word level tracking
-> /tier 1                                    originals only, survey excluded
-> /tables 2mb                                set query over the table layer
-> /ask what penalty does TierLab use         generated answer with citations (needs a key)
+> /tier 1
+> /tables 2mb
 ```
 
-**Search works without an API key.** Most of the time, seeing the passage itself with its page and section is the whole answer.
+Prose retrieval combines dense retrieval, BM25, reciprocal-rank fusion, and an
+optional reranker. Results can be limited to a document or provenance tier.
 
-### 2. Proofreading a finished draft
-
-```bash
-python3 check.py --file draft.docx
-```
-
-Takes `.docx` / `.pdf` / `.txt` directly, no manual export step. Pipeline: split into paragraphs -> extract claims -> resolve citations -> retrieve within scope -> adjudicate -> attach the original span.
-
-The report shows only what needs attention by default, ranked by severity:
-
-```
-contradicted -> not_found -> condition_mismatch -> underspecified
--> possibly_missing_citation -> unresolvable_reference
-```
-
-`--all` also lists claims that checked out; `--limit N` restricts to the first N paragraphs.
-
-Single-passage check:
+### Audit claims in a draft
 
 ```bash
 python3 check.py --text "Colloid achieves 1.01-1.76x speedup [3]."
 ```
 
----
+`check.py`:
 
-## Running it
+1. extracts reviewable claims;
+2. resolves citations through `corpus.yaml`;
+3. retrieves evidence from the cited source;
+4. records page-level evidence and a review signal.
+
+Possible review signals include:
+
+- `supported`
+- `condition_mismatch`
+- `contradicted`
+- `not_found`
+- `underspecified`
+- `possibly_missing_citation`
+- `unresolvable_reference`
+
+These are not final truth labels. They prioritize what a human author should
+inspect next.
+
+### Ask a narrow, grounded question
 
 ```bash
-python3 parse.py                      # PDFs -> blocks.jsonl
-```
-```bash
-python3 quality_check.py              # rule-based gate; lists pages needing review
-```
-```bash
-python3 build_index.py --selftest     # build the index and run its acceptance check
-```
-```bash
-python3 retrieve.py --acceptance      # retrieval-layer acceptance check
-```
-```bash
-python3 eval/validate_eval_set.py     # verify the eval set itself
+python3 ask.py "What migration penalty does TierLab use?"
 ```
 
-Everything above runs fully offline, no API key required.
+The optional answer layer receives retrieved evidence only and resolves source
+markers to document, page, and section metadata in application code.
 
-The generation layer needs a provider configured (default: DeepSeek):
+## Example: preserving conditions, not only numbers
+
+Survey claim:
+
+> "Colloid achieves 1.01–1.76× speedup [3]."
+
+The original paper reports that range, but under specific conditions, including
+alternate-tier latency and workload context.
+
+The appropriate output is not simply "correct" or "incorrect":
+
+```text
+condition_mismatch
+
+The reported range appears in the cited source, but the survey omits conditions
+attached to that result.
+```
+
+The reviewer can then inspect the original page directly.
+
+## Repository map
+
+| File | Purpose |
+|---|---|
+| `corpus.py` | Corpus registry, validation, and bootstrap workflow |
+| `corpus.yaml` | Citation references, document IDs, tiers, and file paths |
+| `checks.yaml` | Corpus-specific acceptance expectations for the index/retrieval self-tests |
+| `parse.py` | Coordinate-aware PDF extraction |
+| `quality_check.py` | Rule-based extraction-quality checks |
+| `vision_verify.py` | Optional rendered-page verification |
+| `build_index.py` | Prose, table, and formula artifact construction |
+| `retrieve.py` | Hybrid retrieval, reranking, and provenance filters |
+| `llm.py` | Model-provider abstraction shared by `ask.py`, `check.py`, and `vision_verify.py` |
+| `ask.py` | Narrow grounded question answering |
+| `check.py` | Citation-scoped quantitative claim audit |
+| `refcheck.py` | Interactive session for repeated lookup/audit queries |
+| `units.py` | Deterministic unit normalization |
+| `eval/` | Hand-annotated evaluation set and comparison harness |
+| `results.md` | Measurements, known defects, and limitations |
+| `requirements.txt` | Pinned third-party dependencies |
+
+## Running the pipeline
+
+Source PDFs are supplied locally and registered in `corpus.yaml`.
+
+```bash
+# PDFs -> structured JSON blocks
+python3 parse.py
+
+# Inspect extraction quality
+python3 quality_check.py
+
+# Build indexes and run index acceptance checks
+python3 build_index.py --selftest
+
+# Run retrieval acceptance checks
+python3 retrieve.py --acceptance
+
+# Validate the hand-annotated evaluation set
+python3 eval/validate_eval_set.py
+```
+
+The extraction, indexing, structured table retrieval, and deterministic
+validation layers run locally without an API key.
+
+The optional generation and claim-adjudication layers require a configured
+provider:
 
 ```bash
 export DEEPSEEK_API_KEY=...
-```
-```bash
-python3 ask.py "What migration penalty does TierLab charge?"
-```
-```bash
-python3 check.py --self-audit         # run the system against its own tier-0 document
-```
-```bash
-python3 eval/run_baseline.py --arms none raw system --repeats 3
+python3 ask.py "What migration penalty does TierLab use?"
+python3 check.py --file draft.docx
 ```
 
-The retrieval layer (embedding model, BM25, reranker) runs entirely local and offline regardless of provider.
+## Measured pipeline acceptance checks
 
-### Visual re-check
+The results below are deterministic pipeline acceptance tests, not LLM accuracy
+benchmarks. They verify that extraction, indexing, provenance filters, and
+structured retrieval behave as intended on the current corpus.
 
-`vision_verify.py` needs a vision-capable provider. DeepSeek has no vision model, and `llm.py` raises an explicit error rather than silently dropping the image:
+Current corpus:
 
-```bash
-REFCHECK_PROVIDER=openai python3 vision_verify.py
-```
+| Item | Count |
+|---|---:|
+| Documents | 13 |
+| Pages | 216 |
+| Extracted blocks | 8,529 |
+| Prose chunks | 1,238 |
+| Structured tables | 88 |
+| Formulas | 11 |
 
----
+Measured checks include:
 
-## Channel health check, and why it exists
+- all 13 rows in the survey's main comparison table reconstructed correctly;
+- a structured query for 2 MB page support returned all expected systems:
+  `MTM`, `NOMAD`, and `NeoMem`;
+- a document filter constrained all top 8 results to the requested paper;
+- excluding tier 0 removed the survey from retrieval results;
+- quality checks flagged 74 pages for visual review.
 
-A vision call can succeed at the transport level while the image never actually arrives, and the model will still produce a fluent, confident-looking comparison report from the text alone.
+See [`results.md`](results.md) for methodology, measurements, known extraction
+defects, and limitations.
 
-A controlled test (same prompt, `images` field removed) demonstrated exactly that:
+## Evaluation status
 
-```json
-{
-  "image_token": "NONE",
-  "page_summary": "A table with three columns: System, Profiling, and Objective.",
-  "discrepancies": [{"location": "Table 2, row MTM [1], column Profiling",
-                     "image_shows": "HW sampling (PEBS)", ...}]
-}
-```
+The repository includes a hand-annotated evaluation set covering answerable
+claims, refusal cases, attribution traps, numeric checks, and condition
+mismatches.
 
-The model asserted what an image "showed" -- an image it never received.
+A three-arm LLM experiment is implemented but not yet reported:
 
-The fix: every call overlays a random token on the rendered page and the model must report it back before anything else. Failing to reproduce the token means the image never arrived; the page is marked `channel_failed_needs_human` and every finding from that call is discarded rather than trusted.
+1. no retrieval;
+2. raw retrieval over unfiltered PDF text;
+3. provenance-aware retrieval in this system.
 
----
+The deterministic acceptance tests above should not be interpreted as an LLM
+accuracy benchmark.
 
-## Current state
+## Data availability
 
-The extraction, quality-gate, indexing, retrieval, ask, and check layers are implemented and pass their respective acceptance checks locally, without any API key. The three-arm comparison harness (`eval/run_baseline.py`) is implemented and ready to run against a configured provider; see [results.md](results.md) for what's been validated so far and what's still open.
+The source PDFs are copyrighted conference papers and are not redistributed in
+this repository. They must be obtained separately and registered locally.
+
+Derived artifacts—including extracted blocks, vector indexes, page images, and
+quality reports—are excluded from version control because they can be regenerated
+from the local corpus.
+
+## Known limitations
+
+- PDF text extraction can be wrong even when it looks plausible.
+- Some units in the current corpus are misencoded in the PDF text layer and
+  require rendered-page review before absence conclusions are trusted.
+- Retrieval can miss relevant evidence.
+- The tool is designed to support human review, not to replace it.
+- The end-to-end LLM comparison has not yet been run.
+
+For details, see [`results.md`](results.md).
