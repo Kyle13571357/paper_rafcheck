@@ -1,0 +1,14 @@
+# Core pipeline (parse.py, build_index.py, retrieve.py, quality_check.py)
+PyMuPDF>=1.28.0
+PyYAML>=6.0.1
+numpy>=1.26.4
+rank-bm25>=0.2.2
+sentence-transformers>=5.6.1
+faiss-cpu>=1.14.3
+
+# Whole-document proofreading (check.py --file *.docx)
+python-docx>=1.2.0
+
+# ask.py / check.py / vision_verify.py use only the standard library's
+# urllib for HTTP -- no SDK required for the DeepSeek/OpenAI/Ollama backends
+# in llm.py.

@@ -146,13 +146,28 @@ def ask(question, retriever=None, k=6, doc_id=None, tier=None, exclude_tier=None
         if m in by_marker and m not in used:
             used.append(m)
     used.sort(key=lambda m: int(m[1:]))
-    answered = bool(data.get("answered")) and bool((data.get("answer") or "").strip())
+
+    # The prompt tells the model every factual statement needs a [S#] marker,
+    # but a prompt instruction is not a guarantee -- the model can say
+    # answered=true and write a fluent, uncited sentence anyway. That's
+    # exactly the failure this project exists to catch elsewhere (an
+    # assertion with no traceable source), so it can't be waved through here
+    # just because the source happens to be this project's own model call.
+    claims_answered = bool(data.get("answered")) and bool((data.get("answer") or "").strip())
+    answered = claims_answered and bool(used)
+    if claims_answered and not used:
+        note = ("model returned answered=true with no resolvable [S#] citation "
+                "in the answer text; treating as unsupported rather than "
+                "trusting the self-report")
+    else:
+        note = data.get("unsupported_note") or ""
+
     return {
         "question": question,
         "answered": answered,
-        "answer": (data.get("answer") or "").strip(),
+        "answer": (data.get("answer") or "").strip() if answered else "",
         "not_stated": None if answered else NOT_STATED,
-        "unsupported_note": data.get("unsupported_note") or "",
+        "unsupported_note": note,
         "citations": [by_marker[m] for m in used],
         "sources": sources,
         "filters": {"doc_id": doc_id, "tier": tier, "exclude_tier": exclude_tier},

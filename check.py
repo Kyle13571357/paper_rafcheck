@@ -263,6 +263,23 @@ def numeric_prescreen(claim, hits):
     return result
 
 
+def _normalize_for_match(s):
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def verify_span(span, hits):
+    """True if `span` actually occurs (whitespace-normalized) in some hit's
+    text. The prompt asks the model to quote verbatim, but a prompt
+    instruction is not a guarantee -- a fabricated-but-plausible quote is
+    exactly the failure mode this project exists to catch, so a self-reported
+    "evidence_span" cannot be presented as evidence until it's located in
+    text this code actually retrieved."""
+    span_n = _normalize_for_match(span)
+    if not span_n:
+        return False
+    return any(span_n in _normalize_for_match(h["text"]) for h in hits)
+
+
 def adjudicate(claim, hits, timeout=300):
     claim_desc = json.dumps({k: claim[k] for k in
                              ("subject", "metric", "value", "unit",
@@ -275,11 +292,32 @@ def adjudicate(claim, hits, timeout=300):
     verdict = str(data.get("verdict", "")).strip().lower()
     if verdict not in VERDICTS:
         verdict = "underspecified"
+    confidence = str(data.get("confidence", "")).strip().lower() or "low"
+    span = (data.get("evidence_span") or "").strip()
+    explanation = (data.get("explanation") or "").strip()
+
+    evidence_verified = verify_span(span, hits) if span else False
+
+    # A "supported" verdict IS the evidence_span -- that's the one sentence a
+    # human would point to if asked "how do you know". If it doesn't actually
+    # appear in what was retrieved, the verdict isn't supported by anything
+    # this code can confirm, and letting it stand as "supported" would be the
+    # exact failure this project is built to catch, just relocated to its own
+    # output.
+    if verdict == "supported" and not evidence_verified:
+        explanation = (
+            "downgraded from 'supported': the model's evidence_span does not "
+            "appear verbatim in the retrieved passages, so the claimed support "
+            "is unconfirmed. " + explanation).strip()
+        verdict = "underspecified"
+        confidence = "low"
+
     return {
         "verdict": verdict,
-        "confidence": str(data.get("confidence", "")).strip().lower() or "low",
-        "evidence_span": (data.get("evidence_span") or "").strip(),
-        "explanation": (data.get("explanation") or "").strip(),
+        "confidence": confidence,
+        "evidence_span": span,
+        "evidence_verified": evidence_verified,
+        "explanation": explanation,
         "condition_in_source": (data.get("condition_in_source") or "").strip(),
     }
 
@@ -402,7 +440,8 @@ def render(report, verbose=False):
                 print("    numeric : claimed value not found by exact match "
                       "(deterministic)")
         if rec.get("evidence_span"):
-            print(f"    evidence: {rec['evidence_span'][:220]}")
+            mark = "" if rec.get("evidence_verified") else " [UNVERIFIED -- not located in retrieved text]"
+            print(f"    evidence: {rec['evidence_span'][:220]}{mark}")
         elif verbose and rec.get("evidence"):
             e = rec["evidence"][0]
             print(f"    top hit : {e['doc_id']} p{e['page_start']}: "
@@ -594,7 +633,8 @@ def render_document_report(report, show_all=False):
             print(f"  numeric check : {ps['matched']!r} found in {ps['in_doc']} "
                   f"p{ps['page']} (deterministic)")
         if r.get("evidence_span"):
-            print(f"  source     : {r['evidence_span'][:300]}")
+            mark = "" if r.get("evidence_verified") else "  [UNVERIFIED -- not located in retrieved text]"
+            print(f"  source     : {r['evidence_span'][:300]}{mark}")
         elif r.get("evidence"):
             e = r["evidence"][0]
             print(f"  closest match : {e['doc_id']} p{e['page_start']} - "
